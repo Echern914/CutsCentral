@@ -4555,6 +4555,7 @@ bookingPublicRouter.post(
             bookingMode: true,
             publicPageEnabled: true,
             subscriptionStatus: true,
+            pastDueSince: true,
             trialEndsAt: true,
             compAccess: true,
           },

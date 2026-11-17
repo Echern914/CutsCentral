@@ -80,6 +80,7 @@ export async function inviteUnfinishedClient(shopId: string, id: string, now: Da
       slug: true,
       publicPageEnabled: true,
       subscriptionStatus: true,
+      pastDueSince: true,
       trialEndsAt: true,
       compAccess: true,
     },

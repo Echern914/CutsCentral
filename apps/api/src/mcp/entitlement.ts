@@ -23,6 +23,7 @@ import { billingEnabled, hasActiveAccess } from "../billing/stripe.js";
 export interface McpEntitlementShop {
   plan: string;
   subscriptionStatus: string;
+  pastDueSince: Date | null;
   trialEndsAt: Date | null;
   compAccess: boolean;
 }

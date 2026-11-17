@@ -47,7 +47,11 @@ export async function upgradeAction(
             ? "Premium AI isn't available quite yet. Check back soon."
             : res.error === "not_an_upgrade"
               ? "To move to a smaller plan, use Manage billing."
-              : "Could not upgrade. Try again in a moment.",
+              : res.error === "card_declined"
+                ? "Your card was declined, so nothing changed. Update it under Manage billing, then try again."
+                : res.error === "payment_past_due"
+                  ? "Your last payment didn't go through. Update your card under Manage billing first, then upgrade."
+                  : "Could not upgrade. Try again in a moment.",
   };
 }
 
@@ -114,8 +118,16 @@ export async function enableReceptionistAction(input: {
   };
 }
 
-export async function portalAction(): Promise<{ error?: string }> {
-  const res = await apiSend<{ url: string }>("POST", "/api/billing/portal");
+export async function portalAction(
+  flow?: "pay",
+): Promise<{ error?: string }> {
+  // flow "pay": a declined bill opens Stripe's page for that invoice (pay it
+  // now), falling back to the portal when there is no open bill.
+  const res = await apiSend<{ url: string }>(
+    "POST",
+    "/api/billing/portal",
+    flow ? { flow } : undefined,
+  );
   if (res.ok && res.data?.url) redirect(res.data.url); // Stripe-hosted portal
   return { error: "Could not open the billing portal. Try again in a moment." };
 }

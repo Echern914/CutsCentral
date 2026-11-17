@@ -179,7 +179,7 @@ describe("comp access toggle", () => {
     // billing.test.ts; here we assert the comp branch directly so it's not
     // dependent on this file's billing-disabled env.
     const { hasActiveAccess } = await import("../billing/stripe.js");
-    const lapsed = { subscriptionStatus: "canceled", trialEndsAt: new Date(0) };
+    const lapsed = { subscriptionStatus: "canceled", trialEndsAt: new Date(0), pastDueSince: null };
     expect(hasActiveAccess(lapsed, { enabled: true })).toBe(false);
     expect(hasActiveAccess({ ...lapsed, compAccess: true }, { enabled: true })).toBe(true);
   });

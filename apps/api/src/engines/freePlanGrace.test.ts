@@ -60,6 +60,7 @@ const reload = (key: string) =>
       trialEndsAt: true,
       trialReminderStage: true,
       subscriptionStatus: true,
+      pastDueSince: true,
       compAccess: true,
     },
   });

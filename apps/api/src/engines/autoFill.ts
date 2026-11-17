@@ -152,6 +152,7 @@ const SHOP_SELECT = {
   depositAmountCents: true,
   requireCardToBook: true,
   subscriptionStatus: true,
+  pastDueSince: true,
   trialEndsAt: true,
   compAccess: true,
   plan: true,

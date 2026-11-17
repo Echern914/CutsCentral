@@ -84,7 +84,7 @@ function signedPayload(event: Record<string, unknown>): {
 }
 
 describe("hasActiveAccess (pure)", () => {
-  const base = { subscriptionStatus: "none", trialEndsAt: null as Date | null };
+  const base = { subscriptionStatus: "none", trialEndsAt: null as Date | null, pastDueSince: null as Date | null };
 
   it("always passes while billing is disabled", () => {
     expect(hasActiveAccess(base, { enabled: false })).toBe(true);

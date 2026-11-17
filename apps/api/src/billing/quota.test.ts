@@ -66,6 +66,7 @@ afterAll(async () => {
 const base = {
   plan: "free",
   subscriptionStatus: "none",
+  pastDueSince: null as Date | null,
   trialEndsAt: null as Date | null,
   compAccess: false,
   receptionistCompAccess: false,

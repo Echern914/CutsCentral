@@ -52,12 +52,19 @@ function argOf(flag) {
   return i !== -1 ? process.argv[i + 1] : null;
 }
 
-const ACTIVE_STATUSES = new Set(["active", "trialing", "past_due"]);
+const ACTIVE_STATUSES = new Set(["active", "trialing"]);
+// Mirrors billing/stripe.ts PAST_DUE_GRACE_MS.
+const PAST_DUE_GRACE_MS = 2 * 24 * 60 * 60 * 1000;
 function hasActiveAccess(shop, now) {
   if (shop.compAccess) return true;
   // We can't read env STRIPE_* here reliably, so assume billing is ENABLED
   // (it is, in prod) — the strict case. A comped/trialing/active shop passes.
   if (ACTIVE_STATUSES.has(shop.subscriptionStatus)) return true;
+  // A declined charge: two days from the decline, then locked until paid.
+  if (shop.subscriptionStatus === "past_due") {
+    if (!shop.pastDueSince) return true;
+    if (now.getTime() < shop.pastDueSince.getTime() + PAST_DUE_GRACE_MS) return true;
+  }
   return shop.trialEndsAt !== null && shop.trialEndsAt.getTime() > now.getTime();
 }
 
@@ -100,6 +107,7 @@ const main = async () => {
           timezone: true,
           loyaltyTextsEnabled: true,
           subscriptionStatus: true,
+          pastDueSince: true,
           trialEndsAt: true,
           compAccess: true,
         },

@@ -54,6 +54,7 @@ const SHOP_SELECT = {
   bookingBufferMin: true,
   requireBookingApproval: true,
   subscriptionStatus: true,
+  pastDueSince: true,
   trialEndsAt: true,
   compAccess: true,
   // AI-receptionist gate + gap-fill budget (see receptionist/config.ts).

@@ -58,6 +58,7 @@ const SHOP_SELECT = {
   name: true,
   timezone: true,
   subscriptionStatus: true,
+  pastDueSince: true,
   trialEndsAt: true,
   compAccess: true,
   plan: true,
@@ -78,6 +79,7 @@ type ApptShop = {
   name: string;
   timezone: string;
   subscriptionStatus: string;
+  pastDueSince: Date | null;
   trialEndsAt: Date | null;
   compAccess: boolean;
   plan: string;

@@ -155,7 +155,18 @@ export function ReceptionistAddonButton({ label }: { label: string }) {
   );
 }
 
-export function ManageBillingButton() {
+export function ManageBillingButton({
+  label = "Manage billing",
+  primary = false,
+  pay = false,
+}: {
+  /** The payment banner says "Update payment"; the billing page, "Manage billing". */
+  label?: string;
+  /** The banner's call to action is the filled button; the billing page's is quiet. */
+  primary?: boolean;
+  /** Open the declined bill itself to pay it now (portal when there is none). */
+  pay?: boolean;
+} = {}) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   return (
@@ -164,13 +175,17 @@ export function ManageBillingButton() {
         disabled={pending}
         onClick={() =>
           startTransition(async () => {
-            const r = await portalAction();
+            const r = await portalAction(pay ? "pay" : undefined);
             if (r?.error) setError(r.error);
           })
         }
-        className="rounded-xl border border-subtle px-5 py-2.5 text-sm text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+        className={
+          primary
+            ? "shrink-0 rounded-xl bg-primary px-3.5 py-1.5 font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90 disabled:opacity-50"
+            : "rounded-xl border border-subtle px-5 py-2.5 text-sm text-offwhite transition-all duration-150 ease-out hover:bg-charcoal-700 disabled:opacity-50"
+        }
       >
-        {pending ? "Opening…" : "Manage billing"}
+        {pending ? "Opening…" : label}
       </button>
       {error && <p className="text-xs text-danger-soft">{error}</p>}
     </div>

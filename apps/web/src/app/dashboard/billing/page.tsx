@@ -21,7 +21,7 @@ import {
 } from "./BillingActions";
 import { ReceptionistControls } from "./ReceptionistControls";
 import { ownsReceptionist, planLabel } from "./planState";
-import { lapseCopy } from "@/lib/lapseCopy";
+import { formatLockDeadline, lapseCopy } from "@/lib/lapseCopy";
 
 // The /api/billing shape lives ONCE in lib/billing.ts (shared with the
 // layout's lock plumbing, TrialBanner, and the receptionist page).
@@ -239,7 +239,11 @@ export default async function BillingPage({
                     ? "Full access, on the house. No card needed, enjoy everything."
                     : b.subscribed
                       ? b.subscriptionStatus === "past_due"
-                        ? "Payment issue. Update your card to keep everything running."
+                        ? !b.hasAccess
+                          ? `${lapseCopy("payment_failed").status} Update your card and pay the bill to switch everything back on.`
+                          : b.pastDueLocksAt
+                            ? `Your last payment didn't go through. Update your card by ${formatLockDeadline(b.pastDueLocksAt, b.timezone)} to keep everything running.`
+                            : "Payment issue. Update your card to keep everything running."
                         : "Active. Thanks for building with us."
                       : !b.billingEnabled
                         ? "Early access: everything is free right now."
@@ -317,10 +321,27 @@ export default async function BillingPage({
                   bookings. Nothing has been deleted — your clients, punches and
                   history are waiting, and reading or exporting your client book
                   still works.{" "}
-                  <a href="#plans" className="font-semibold underline underline-offset-2">
-                    Start your plan
-                  </a>{" "}
-                  — pick any plan below and checkout switches everything back on.
+                  {b.lapse === "payment_failed" ? (
+                    // The plan is still yours - it is the BILL that's unpaid.
+                    // Paying it switches everything back on; a new plan from
+                    // the cards below would be a second subscription.
+                    <>
+                      Pay the bill with a card that works and everything
+                      switches back on.
+                      {b.canManage && (
+                        <span className="mt-3 block">
+                          <ManageBillingButton label="Update payment" primary pay />
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <a href="#plans" className="font-semibold underline underline-offset-2">
+                        Start your plan
+                      </a>{" "}
+                      — pick any plan below and checkout switches everything back on.
+                    </>
+                  )}
                 </div>
               </HideInNativeApp>
             )}

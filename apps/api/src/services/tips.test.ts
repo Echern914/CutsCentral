@@ -28,6 +28,7 @@ const shop = (over: Partial<TipShopFacts> = {}): TipShopFacts => ({
   connectChargesEnabled: true,
   stripeConnectAccountId: "acct_1",
   subscriptionStatus: "active",
+  pastDueSince: null,
   trialEndsAt: null,
   compAccess: false,
   ...over,

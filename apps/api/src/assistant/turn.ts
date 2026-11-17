@@ -83,6 +83,7 @@ interface Ctx extends TurnContext {
     // The booking page's own rules, which a chat booking must not get around.
     requireBookingApproval: boolean;
     subscriptionStatus: string;
+    pastDueSince: Date | null;
     trialEndsAt: Date | null;
     compAccess: boolean;
     bookingPolicyText: string | null;
@@ -104,6 +105,7 @@ async function loadContext(actor: AssistantActor, now: Date): Promise<Ctx> {
       requireCardToBook: true,
       requireBookingApproval: true,
       subscriptionStatus: true,
+      pastDueSince: true,
       trialEndsAt: true,
       compAccess: true,
       bookingPolicyText: true,

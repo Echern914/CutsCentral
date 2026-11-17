@@ -64,6 +64,7 @@ declare global {
         billing: {
           plan: string;
           subscriptionStatus: string;
+          pastDueSince: Date | null;
           trialEndsAt: Date | null;
           compAccess: boolean;
         };
@@ -194,6 +195,7 @@ export async function requireMcpAuth(
     select: {
       plan: true,
       subscriptionStatus: true,
+      pastDueSince: true,
       trialEndsAt: true,
       compAccess: true,
       // Vocabulary inputs, read on the same OWNER connection for the same

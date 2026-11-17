@@ -675,7 +675,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "change-card",
     q: "How do I update my card?",
-    a: "In your billing settings on the web — update the card, see your invoices, and change plan from the same place.",
+    a: "In your billing settings on the web — update the card, see your invoices, and change plan from the same place.\n\nIf a plan payment is declined, your dashboard shows a banner with the deadline: you have 2 days to update your card and pay the bill before bookings switch off. Tap Update payment to pay it right away.",
     keywords: ["card", "update card", "payment method", "credit card", "expired", "invoice", "receipt", "billing"],
     category: "money",
     hidesInApp: true,

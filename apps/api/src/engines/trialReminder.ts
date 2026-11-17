@@ -327,6 +327,7 @@ export async function notifyCompEnded(
       name: true,
       compAccess: true,
       subscriptionStatus: true,
+      pastDueSince: true,
       trialEndsAt: true,
       owner: { select: { email: true, name: true } },
     },

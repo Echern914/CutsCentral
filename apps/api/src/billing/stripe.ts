@@ -65,23 +65,55 @@ function stripe(): Stripe {
   return client;
 }
 
+/**
+ * Tests only: stand a fake in for the Stripe client (null puts the real one
+ * back). For flows that call Stripe and then act on its answer - an upgrade
+ * whose charge was declined - where the answer IS the thing under test.
+ */
+export function __setStripeClientForTests(fake: unknown): void {
+  client = fake as Stripe | null;
+}
+
 /** Shared Stripe client for the Connect/payments module (same key, pinned version). */
 export function stripeClient(): Stripe {
   return stripe();
 }
 
 /**
- * Subscription states that keep the product unlocked. past_due rides Stripe's
- * dunning/retry window instead of cutting a paying shop off on one failed
- * card; Stripe moves it to canceled/unpaid if retries exhaust.
+ * Subscription states that count as a live subscription: the shop is on a
+ * plan, keeps its tier, and can upgrade or manage it. past_due is one of them
+ * - a declined charge does not end the plan - but it unlocks the product only
+ * for PAST_DUE_GRACE_MS (hasActiveAccess). Stripe moves it to canceled/unpaid
+ * if its own retries exhaust.
  */
 export const ACTIVE_STATUSES = new Set(["active", "trialing", "past_due"]);
+
+/**
+ * How long a shop keeps working after a subscription charge is declined:
+ * two days (Eric, 2026-11-17), counted from Shop.pastDueSince. Paying the bill
+ * at any point - a Stripe retry, or a new card in the portal - clears it.
+ */
+export const PAST_DUE_GRACE_MS = 2 * 24 * 60 * 60 * 1000;
 
 /** The slice of Shop that access checks need. */
 export interface BillingShop {
   subscriptionStatus: string;
   trialEndsAt: Date | null;
   compAccess?: boolean;
+  /** When the subscription went past_due; null when it is not. */
+  pastDueSince: Date | null;
+}
+
+/**
+ * When a past_due shop locks: pastDueSince + PAST_DUE_GRACE_MS. Null when the
+ * shop is not past_due, or its decline was never stamped (then it is not
+ * locked for it - see hasActiveAccess).
+ */
+export function pastDueLocksAt(
+  shop: Pick<BillingShop, "subscriptionStatus" | "pastDueSince">,
+): Date | null {
+  if (shop.subscriptionStatus !== "past_due" || !shop.pastDueSince) return null;
+  return new Date(shop.pastDueSince.getTime() + PAST_DUE_GRACE_MS);
 }
 
 /**
@@ -89,6 +121,11 @@ export interface BillingShop {
  * true while billing is off). compAccess is checked FIRST and ignores Stripe
  * entirely, so a comped friend/tester keeps Premium even after billing goes
  * live and even with no card on file.
+ *
+ * A past_due subscription has access for PAST_DUE_GRACE_MS after the decline,
+ * then none until it is paid. An unstamped past_due (pastDueSince null - only
+ * possible for a row the webhook has not reached) keeps access: locking a
+ * paying shop needs a recorded decline, never a missing one.
  */
 export function hasActiveAccess(
   shop: BillingShop,
@@ -97,8 +134,15 @@ export function hasActiveAccess(
   if (shop.compAccess) return true;
   const enabled = opts.enabled ?? billingEnabled();
   if (!enabled) return true;
-  if (ACTIVE_STATUSES.has(shop.subscriptionStatus)) return true;
   const now = opts.now ?? new Date();
+  if (shop.subscriptionStatus === "past_due") {
+    const locksAt = pastDueLocksAt(shop);
+    if (locksAt === null || now.getTime() < locksAt.getTime()) return true;
+    // Past the grace: no subscription access. (A trial that somehow still
+    // runs is judged below, like any other shop.)
+  } else if (ACTIVE_STATUSES.has(shop.subscriptionStatus)) {
+    return true;
+  }
   return shop.trialEndsAt !== null && shop.trialEndsAt.getTime() > now.getTime();
 }
 
@@ -331,13 +375,33 @@ export function tierBillingEnabled(tier: CheckoutTier): boolean {
 }
 
 /**
+ * What an in-place tier change came to:
+ *  - "upgraded": the prorated difference was paid and the new price is live;
+ *  - "declined": the charge did not go through, so NOTHING changed - the shop
+ *    stays on its plan (Stripe holds the change as a pending update for 23
+ *    hours and applies it only if that invoice is paid, then discards it);
+ *  - "failed": any other error (logged).
+ */
+export type TierChangeOutcome = "upgraded" | "declined" | "failed";
+
+/**
  * Move an ACTIVE base subscription to another tier in place: swap its single
- * item to the target price and stamp metadata.tier in the SAME update call
- * (two calls would race the customer.subscription.updated webhook - the
- * webhook fired by the items swap must already see the new tier).
- * always_invoice bills the prorated difference immediately. We also write the
- * new plan optimistically so the UI flips at once; the webhook converges to
- * the same value. Returns false (logged) on any Stripe error.
+ * item to the target price with proration_behavior=always_invoice, which bills
+ * the prorated difference immediately.
+ *
+ * 🔴 payment_behavior=pending_if_incomplete: the swap applies ONLY if that
+ * charge succeeds. Stripe's default applies it regardless, which handed a shop
+ * whose card was declined the bigger plan for nothing and turned its whole
+ * subscription past_due (2026-11-17). Now a decline leaves the plan, the
+ * status and the shop exactly as they were, and the barber is told.
+ *
+ * metadata.tier is written in a SECOND call, after the swap applied: pending
+ * updates refuse metadata. Nothing depends on it arriving first - the plan is
+ * read off the subscription's PRICE (planForSubscription), the tag is only the
+ * fallback for a price this process does not know.
+ *
+ * We also write the new plan optimistically so the UI flips at once; the
+ * webhook converges to the same value.
  *
  * Used for UPGRADES (starter -> pro, starter -> pro_ai, pro -> pro_ai). A
  * downgrade goes through the Stripe portal, where the proration and the
@@ -347,25 +411,49 @@ export function tierBillingEnabled(tier: CheckoutTier): boolean {
 export async function changeSubscriptionTier(
   shop: { id: string; stripeSubscriptionId: string | null },
   tier: CheckoutTier,
-): Promise<boolean> {
+  opts: { now?: Date } = {},
+): Promise<TierChangeOutcome> {
   const price = priceIdForTier(tier);
-  if (!shop.stripeSubscriptionId || !price) return false;
+  if (!shop.stripeSubscriptionId || !price) return "failed";
   try {
     const sub = await stripe().subscriptions.retrieve(shop.stripeSubscriptionId);
     const item = sub.items.data[0];
-    if (!item) return false;
-    await stripe().subscriptions.update(
+    if (!item) return "failed";
+    const minute = Math.floor((opts.now ?? new Date()).getTime() / 60_000);
+    const updated = await stripe().subscriptions.update(
       sub.id,
       {
         items: [{ id: item.id, price }],
-        metadata: { ...sub.metadata, tier },
         proration_behavior: "always_invoice",
+        payment_behavior: "pending_if_incomplete",
       },
-      // `always_invoice` bills the prorated difference the moment this lands;
-      // a retried request must not bill it twice. One key per (subscription,
-      // target price): the same upgrade replays, a different one does not.
-      { idempotencyKey: `upgrade:${sub.id}:${price}` },
+      // `always_invoice` bills the prorated difference the moment this lands,
+      // so a double tap must not bill it twice: one key per (subscription,
+      // target price, minute). The minute matters since pending updates: a
+      // barber who was declined, fixed the card and tries again must reach
+      // Stripe, not replay the declined response for 24 hours.
+      { idempotencyKey: `upgrade:${sub.id}:${price}:${minute}` },
     );
+    if (updated.pending_update) {
+      logger.warn(
+        { shopId: shop.id, subscriptionId: sub.id, tier },
+        "subscription upgrade held: the prorated charge did not go through",
+      );
+      return "declined";
+    }
+    try {
+      await stripe().subscriptions.update(
+        sub.id,
+        { metadata: { ...sub.metadata, tier } },
+        { idempotencyKey: `upgrade-tag:${sub.id}:${tier}:${minute}` },
+      );
+    } catch (err) {
+      // The upgrade itself is paid and live; the tag is only a fallback.
+      logger.warn(
+        { shopId: shop.id, subscriptionId: sub.id, tier, ...stripeErrorFacts(err) },
+        "upgrade applied, but tagging metadata.tier failed",
+      );
+    }
     await prisma.shop.update({
       where: { id: shop.id },
       data: { plan: tier },
@@ -373,13 +461,13 @@ export async function changeSubscriptionTier(
     // Premium AI includes the shop's own number - provision it now
     // (idempotent fire-and-forget; a failure only logs, never blocks billing).
     if (tier === "pro_ai") void ensureShopNumber(shop.id);
-    return true;
+    return "upgraded";
   } catch (err) {
     logger.error(
       { shopId: shop.id, subscriptionId: shop.stripeSubscriptionId, tier, ...stripeErrorFacts(err) },
       "subscription tier change failed",
     );
-    return false;
+    return "failed";
   }
 }
 
@@ -387,7 +475,7 @@ export async function changeSubscriptionTier(
 export async function upgradeSubscriptionToPremiumAi(shop: {
   id: string;
   stripeSubscriptionId: string | null;
-}): Promise<boolean> {
+}): Promise<TierChangeOutcome> {
   return changeSubscriptionTier(shop, "pro_ai");
 }
 
@@ -458,6 +546,37 @@ export async function createPortalUrl(
   }
   const session = await stripe().billingPortal.sessions.create(params);
   return session.url;
+}
+
+/**
+ * Stripe's hosted page for the shop's unpaid subscription bill, or null when
+ * there is none to pay (not past due/unpaid, no subscription, the latest
+ * invoice already paid or voided, or Stripe unreachable - the caller then
+ * opens the portal instead). Paying it there settles the bill at once; just
+ * changing the card in the portal would leave it waiting for Stripe's next
+ * scheduled retry, days away.
+ */
+export async function openInvoiceUrl(shop: {
+  subscriptionStatus: string;
+  stripeSubscriptionId: string | null;
+}): Promise<string | null> {
+  if (shop.subscriptionStatus !== "past_due" && shop.subscriptionStatus !== "unpaid") return null;
+  if (!shop.stripeSubscriptionId) return null;
+  try {
+    const sub = await stripe().subscriptions.retrieve(shop.stripeSubscriptionId, {
+      expand: ["latest_invoice"],
+    });
+    const inv = sub.latest_invoice;
+    if (!inv || typeof inv === "string") return null;
+    if (inv.status !== "open" || !inv.hosted_invoice_url) return null;
+    return inv.hosted_invoice_url;
+  } catch (err) {
+    logger.warn(
+      { subscriptionId: shop.stripeSubscriptionId, ...stripeErrorFacts(err) },
+      "open invoice lookup failed; falling back to the portal",
+    );
+    return null;
+  }
 }
 
 /** Verify a webhook payload's signature against the raw request bytes. */
@@ -576,6 +695,7 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
           stripeCustomerId: customerId ?? undefined,
           stripeSubscriptionId: subscriptionId,
           subscriptionStatus: "active",
+          pastDueSince: null,
           // Sessions created before tiers existed carry no metadata.tier ->
           // "pro" (the legacy default). Only an explicit, known tag maps elsewhere.
           plan: planForTierMetadata(session.metadata?.tier),
@@ -631,9 +751,26 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
           subscriptionStatus: status,
           stripeSubscriptionId: status === "canceled" ? null : sub.id,
           plan: ACTIVE_STATUSES.has(status) ? tier : "free",
+          // Any status but past_due ends a decline episode (paid, or over).
+          ...(status === "past_due" ? {} : { pastDueSince: null }),
           ...(created !== null ? { subscriptionEventCreated: created } : {}),
         },
       });
+      // past_due starts the two-day grace (PAST_DUE_GRACE_MS) - ONCE per
+      // episode: a later past_due update (another retry declined, a card
+      // edit) must not restart the clock, so only an unstamped row is
+      // stamped. The clock starts at the event, not at delivery, so a late
+      // or replayed webhook cannot hand out extra days.
+      if (count > 0 && status === "past_due") {
+        await prisma.shop.updateMany({
+          where: {
+            ...(shopId ? { id: shopId } : { stripeCustomerId: customerId }),
+            subscriptionStatus: "past_due",
+            pastDueSince: null,
+          },
+          data: { pastDueSince: created !== null ? new Date(created * 1000) : new Date() },
+        });
+      }
       // An ACTIVE Premium AI subscription includes the shop's own number
       // (idempotent - re-fires harmlessly on every subscription.updated).
       if (count > 0 && tier === "pro_ai" && ACTIVE_STATUSES.has(status)) {

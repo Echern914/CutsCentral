@@ -401,7 +401,7 @@ describe("the gate, on its own", () => {
       bookedVia: over.bookedVia ?? null,
       email: "a@test.local",
     },
-    shop: { ...TIP_READY, subscriptionStatus: "active", trialEndsAt: null },
+    shop: { ...TIP_READY, subscriptionStatus: "active", pastDueSince: null, trialEndsAt: null },
     tip: null,
     client: { email: null, archivedAt: null, bookingBlockedAt: null, emailOptedOut: false, emailSuppressedAt: null },
     addressSuppressed: false,

@@ -159,6 +159,7 @@ export const TIP_SHOP_SELECT = {
   connectChargesEnabled: true,
   stripeConnectAccountId: true,
   subscriptionStatus: true,
+  pastDueSince: true,
   trialEndsAt: true,
   compAccess: true,
 } as const;

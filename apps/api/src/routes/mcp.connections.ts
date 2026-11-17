@@ -79,7 +79,7 @@ mcpConnectionsRouter.get("/connections", async (req, res) => {
 
   const shop = await prisma.shop.findUnique({
     where: { id: shopId },
-    select: { plan: true, subscriptionStatus: true, trialEndsAt: true, compAccess: true },
+    select: { plan: true, subscriptionStatus: true, pastDueSince: true, trialEndsAt: true, compAccess: true },
   });
   const entitled = shop ? hasMcpEntitlement(shop) : false;
 

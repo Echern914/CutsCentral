@@ -1635,6 +1635,7 @@ export async function offerFreedSlotToWaitlist(
       slotOpenedTextsEnabled: true,
       requireBookingApproval: true,
       subscriptionStatus: true,
+      pastDueSince: true,
       trialEndsAt: true,
       compAccess: true,
       plan: true,

@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-17-declined-payment-two-days",
+    date: "2026-11-17",
+    kind: "fix",
+    title: "A declined plan payment gives you 2 days",
+    body:
+      "If your plan payment is declined, your dashboard now says so, with the deadline: you have 2 days to " +
+      "update your card before bookings switch off. Upgrades now go through only once the charge is paid; a " +
+      "declined card leaves your plan exactly as it was.",
+  },
+  {
     id: "2026-11-16-clients-stay-on-your-domain",
     date: "2026-11-16",
     kind: "feature",
