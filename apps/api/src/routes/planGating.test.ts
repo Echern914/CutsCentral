@@ -214,6 +214,7 @@ describe("the receptionist runs only where it was paid for", () => {
     const base = {
       ...PAID("starter"),
       trialEndsAt: null,
+      pastDueSince: null,
       compAccess: false,
       aiTrialEndsAt: null,
       receptionistEnabled: true,
@@ -323,6 +324,7 @@ describe("a lapse is called what it is", () => {
     const now = new Date("2026-06-01T00:00:00Z");
     const shop = {
       subscriptionStatus: "canceled",
+      pastDueSince: null,
       trialEndsAt: new Date("2026-01-01T00:00:00Z"),
       compAccess: false,
       compEndedAt: new Date("2026-02-01T00:00:00Z"),

@@ -73,8 +73,11 @@ export function hasPremiumAccess(shop: PlanShop, opts: AccessOptions = {}): bool
  *   trial_ended        - never subscribed, and its signup trial ran out;
  *   comp_ended         - an operator switched its complimentary access off
  *                        (and it has not subscribed since);
- *   subscription_ended - it paid once, and the subscription is canceled or
- *                        unpaid;
+ *   payment_failed     - the subscription is still on, but a charge was
+ *                        declined and not paid: past_due beyond its two-day
+ *                        grace, or unpaid once Stripe's retries ran out.
+ *                        Paying the bill turns the shop back on - no new plan;
+ *   subscription_ended - it paid once, and the subscription is canceled;
  *   no_plan            - none of the above on record (no trial date, never
  *                        subscribed, never comped).
  *
@@ -84,9 +87,15 @@ export function hasPremiumAccess(shop: PlanShop, opts: AccessOptions = {}): bool
  * comped -> uncomped -> subscribed -> canceled is a subscription that ended,
  * while subscribed -> canceled -> comped -> uncomped is a comp that ended.
  */
-export type LapseReason = "trial_ended" | "comp_ended" | "subscription_ended" | "no_plan";
+export type LapseReason =
+  | "trial_ended"
+  | "comp_ended"
+  | "payment_failed"
+  | "subscription_ended"
+  | "no_plan";
 
 const NEVER_PAID_STATUSES = new Set(["none", "incomplete", "incomplete_expired"]);
+const UNPAID_BILL_STATUSES = new Set(["past_due", "unpaid"]);
 
 export interface LapseShop extends BillingShop {
   compEndedAt: Date | null;
@@ -95,6 +104,7 @@ export interface LapseShop extends BillingShop {
 
 export function lapseReasonFor(shop: LapseShop, opts: AccessOptions = {}): LapseReason | null {
   if (hasActiveAccess(shop, { now: opts.now, enabled: opts.enabled })) return null;
+  if (UNPAID_BILL_STATUSES.has(shop.subscriptionStatus)) return "payment_failed";
   if (
     shop.compEndedAt !== null &&
     (shop.subscriptionEventCreated === null ||

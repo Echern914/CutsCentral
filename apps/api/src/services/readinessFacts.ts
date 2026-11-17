@@ -113,6 +113,7 @@ export async function collectReadinessFacts(
       notifyPhone: true,
       // hasActiveAccess
       subscriptionStatus: true,
+      pastDueSince: true,
       trialEndsAt: true,
       compAccess: true,
       // conditional features

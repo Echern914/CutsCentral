@@ -15,6 +15,8 @@ import {
   createPortalUrl,
   createReceptionistCheckoutUrl,
   hasActiveAccess,
+  pastDueLocksAt,
+  openInvoiceUrl,
   premiumAiBillingEnabled,
   receptionistBillingEnabled,
   starterBillingEnabled,
@@ -66,6 +68,12 @@ billingRouter.get("/", async (req, res) => {
     // the billing page word the lapse from this, so an un-comped shop is never
     // told its "trial has ended". Additive: the web tolerates its absence.
     lapse: lapseReasonFor(shop),
+    // A declined subscription charge: when the shop locks unless the bill is
+    // paid first (pastDueSince + two days), null when nothing is past due.
+    // Drives the dashboard's payment banner. Additive, like `lapse`.
+    pastDueLocksAt: pastDueLocksAt(shop)?.toISOString() ?? null,
+    // The shop's zone, so that deadline reads in the barber's own time.
+    timezone: shop.timezone,
     canManage: Boolean(shop.stripeCustomerId),
     // Monthly marketing-SMS usage vs the tier's included quota. quota=null =
     // unlimited (billing off - JSON has no Infinity). Hard stop at the quota.
@@ -283,14 +291,25 @@ billingRouter.post("/upgrade", async (req, res) => {
     res.status(409).json({ error: "no_subscription" });
     return;
   }
+  // A bill that is already unpaid is settled first: an upgrade would put a
+  // second charge on the card that just declined the first.
+  if (shop.subscriptionStatus === "past_due") {
+    res.status(409).json({ error: "payment_past_due" });
+    return;
+  }
   // Only UP. A Premium shop asking for Starter is a downgrade, which the
   // portal handles (with Stripe's own explanation of the proration).
   if (!(UPGRADE_PATHS[shop.plan] ?? []).includes(tier)) {
     res.status(409).json({ error: "not_an_upgrade" });
     return;
   }
-  const ok = await changeSubscriptionTier(shop, tier);
-  if (!ok) {
+  const outcome = await changeSubscriptionTier(shop, tier);
+  if (outcome === "declined") {
+    // Nothing changed: same plan, same status. 402 = the card said no.
+    res.status(402).json({ error: "card_declined" });
+    return;
+  }
+  if (outcome !== "upgraded") {
     res.status(502).json({ error: "upgrade_failed" });
     return;
   }
@@ -325,14 +344,26 @@ billingRouter.post("/portal", async (req, res) => {
   }
   // flow="cancel" deep-links the portal to the cancel-subscription screen
   // (used by the "Cancel membership" button); default opens the overview.
+  // flow="pay" is the payment banner's "Update payment": a shop with a
+  // declined bill goes straight to Stripe's page for THAT invoice, where a
+  // new card pays it on the spot and the subscription turns back on. With no
+  // open bill to pay it falls back to the portal.
   const parsed = z
-    .object({ flow: z.enum(["cancel"]).optional() })
+    .object({ flow: z.enum(["cancel", "pay"]).optional() })
     .safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_input" });
     return;
   }
-  const url = await createPortalUrl(req.shop!, { flow: parsed.data.flow });
+  const flow = parsed.data.flow;
+  if (flow === "pay") {
+    const invoiceUrl = await openInvoiceUrl(req.shop!);
+    if (invoiceUrl) {
+      res.json({ url: invoiceUrl });
+      return;
+    }
+  }
+  const url = await createPortalUrl(req.shop!, { flow: flow === "cancel" ? "cancel" : undefined });
   if (!url) {
     res.status(409).json({ error: "no_billing_account" });
     return;

@@ -29,6 +29,7 @@ const shop = (
   plan: "free",
   subscriptionStatus: "none",
   trialEndsAt: null as Date | null,
+  pastDueSince: null as Date | null,
   compAccess: false,
   ...over,
 });

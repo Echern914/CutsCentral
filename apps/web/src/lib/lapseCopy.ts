@@ -13,6 +13,30 @@ import type { LapseReason } from "@/lib/billing";
  * Client-safe on purpose: no server imports, only a type.
  */
 
+/**
+ * "Thursday, Nov 19, 3:27 PM" for a past-due shop's lock deadline, in the
+ * shop's own zone when we have it (this renders on the server, which has no
+ * idea where the barber is).
+ */
+export function formatLockDeadline(iso: string, timeZone?: string): string {
+  const d = new Date(iso);
+  const opts: Intl.DateTimeFormatOptions = {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  };
+  try {
+    return d.toLocaleString("en-US", { ...opts, timeZone });
+  } catch {
+    return d.toLocaleString("en-US", { ...opts, timeZone: "UTC" });
+  }
+}
+
+/** The label on the way to pay an unpaid bill (the Stripe portal). */
+export const FIX_PAYMENT_LABEL = "Update payment";
+
 /** Where every "start your plan" link goes: straight to the plan cards. */
 export const START_PLAN_HREF = "/dashboard/billing#plans";
 export const START_PLAN_LABEL = "Start your plan";
@@ -37,6 +61,11 @@ export function lapseCopy(reason: LapseReason | null | undefined): LapseCopy {
       return {
         headline: "Your complimentary ChairBack access has ended",
         status: `Your complimentary access has ended — ${WHAT_IS_OFF}.`,
+      };
+    case "payment_failed":
+      return {
+        headline: "Your last ChairBack payment didn't go through",
+        status: `Your last payment didn't go through — ${WHAT_IS_OFF} until it's paid.`,
       };
     case "subscription_ended":
       return {

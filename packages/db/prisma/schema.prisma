@@ -361,6 +361,11 @@ model Shop {
   // access. The receptionist add-on keeps its own clock (separate subscription).
   subscriptionEventCreated  Int?
   receptionistEventCreated  Int?
+  // When the base subscription went past_due (a renewal or upgrade charge was
+  // declined); null whenever it is not past_due. The shop keeps working for
+  // PAST_DUE_GRACE_MS from here, then locks until the bill is paid
+  // (billing/stripe.ts hasActiveAccess). Set once per episode by the webhook.
+  pastDueSince         DateTime?
   trialEndsAt          DateTime?
   // Comped full access (friends / testers / partners). When true, the shop has
   // Premium regardless of Stripe - independent of trial/subscription, survives

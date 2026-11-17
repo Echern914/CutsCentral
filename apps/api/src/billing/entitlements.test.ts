@@ -76,17 +76,17 @@ describe("hasActiveAccess (verified Stripe state only)", () => {
     ["trialing", true],
   ])("subscriptionStatus %s with a lapsed trial -> access %s", (status, expected) => {
     expect(
-      hasActiveAccess({ subscriptionStatus: status, trialEndsAt: lapsed }, { enabled: true, now }),
+      hasActiveAccess({ subscriptionStatus: status, trialEndsAt: lapsed, pastDueSince: null }, { enabled: true, now }),
     ).toBe(expected);
   });
 
   it("a comp ignores Stripe entirely; a live trial passes on its own", () => {
     expect(
-      hasActiveAccess({ subscriptionStatus: "unpaid", trialEndsAt: lapsed, compAccess: true }, { enabled: true, now }),
+      hasActiveAccess({ subscriptionStatus: "unpaid", trialEndsAt: lapsed, pastDueSince: null, compAccess: true }, { enabled: true, now }),
     ).toBe(true);
     expect(
       hasActiveAccess(
-        { subscriptionStatus: "none", trialEndsAt: new Date(now.getTime() + DAY) },
+        { subscriptionStatus: "none", trialEndsAt: new Date(now.getTime() + DAY), pastDueSince: null },
         { enabled: true, now },
       ),
     ).toBe(true);

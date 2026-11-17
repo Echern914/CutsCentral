@@ -3,7 +3,12 @@ import { apiGet, type ApiResult } from "@/lib/api";
 import { NO_LOCKS, type FeatureLocks } from "@/lib/featureLocks";
 
 /** GET /api/billing `lapse` (apps/api billing/entitlements.ts lapseReasonFor). */
-export type LapseReason = "trial_ended" | "comp_ended" | "subscription_ended" | "no_plan";
+export type LapseReason =
+  | "trial_ended"
+  | "comp_ended"
+  | "payment_failed"
+  | "subscription_ended"
+  | "no_plan";
 
 /**
  * The full GET /api/billing shape (apps/api/src/routes/billing.ts). ONE
@@ -30,6 +35,14 @@ export interface BillingSummary {
    * payload has no such field, and readers fall back to neutral wording.
    */
   lapse?: LapseReason | null;
+  /**
+   * A declined subscription charge: when the shop locks unless the bill is
+   * paid (two days after the decline). Null when not past due. Optional: an
+   * older API payload has no such field.
+   */
+  pastDueLocksAt?: string | null;
+  /** The shop's IANA zone, for wording that deadline. Optional, like the above. */
+  timezone?: string;
   canManage: boolean;
   smsUsage: { used: number; quota: number | null; resetsAt: string };
   /** Broadcast-email allowance this month. Optional: absent on an older payload. */

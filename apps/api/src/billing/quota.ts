@@ -49,6 +49,7 @@ const QUOTA_SHOP_SELECT = {
   plan: true,
   aiTrialEndsAt: true,
   subscriptionStatus: true,
+  pastDueSince: true,
   trialEndsAt: true,
   compAccess: true,
   receptionistCompAccess: true,

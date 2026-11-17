@@ -67,6 +67,7 @@ const GATE_SELECT = {
   receptionistCompAccess: true,
   receptionistTermsAcceptedAt: true,
   subscriptionStatus: true,
+  pastDueSince: true,
   trialEndsAt: true,
   compAccess: true,
   twilioNumber: true,

@@ -4,7 +4,14 @@ import { HideInNativeApp } from "@/components/HideInNativeApp";
 import { ShowInNativeApp } from "@/components/ShowInNativeApp";
 import { IfNativeBillingLink, UpgradeOnWebLink } from "@/components/UpgradeOnWebLink";
 import { getBillingSummary } from "@/lib/billing";
-import { START_PLAN_HREF, START_PLAN_LABEL, lapseCopy } from "@/lib/lapseCopy";
+import {
+  FIX_PAYMENT_LABEL,
+  START_PLAN_HREF,
+  START_PLAN_LABEL,
+  formatLockDeadline,
+  lapseCopy,
+} from "@/lib/lapseCopy";
+import { ManageBillingButton } from "@/app/dashboard/billing/BillingActions";
 
 /**
  * Slim banner under the dashboard nav. Silent while billing is disabled, the
@@ -39,7 +46,53 @@ export async function TrialBanner({
 } = {}) {
   const res = await getBillingSummary();
   const b = res.data;
-  if (!b?.billingEnabled || b.subscribed || b.compAccess) return null;
+  if (!b?.billingEnabled || b.compAccess) return null;
+
+  // A declined subscription charge. Checked BEFORE the `subscribed` exit: a
+  // past_due shop still counts as subscribed, and it is exactly the shop that
+  // must hear about it. Two days to pay (the API's pastDueLocksAt), then the
+  // shop locks until it does. Paying is the Stripe portal, never a new plan -
+  // "Start your plan" here would sell a second subscription on top of the
+  // unpaid one.
+  const pastDueOpen = b.subscriptionStatus === "past_due" && b.hasAccess;
+  if (pastDueOpen || b.lapse === "payment_failed") {
+    const message = pastDueOpen
+      ? `Your last ChairBack payment didn't go through. Update your card ${
+          b.pastDueLocksAt
+            ? `by ${formatLockDeadline(b.pastDueLocksAt, b.timezone)}`
+            : "soon"
+        } to keep bookings and your calendar on.`
+      : `${lapseCopy("payment_failed").headline} — bookings and your calendar are switched off until it's paid. Everything you set up is still here.`;
+    return (
+      <div className="mx-auto mt-3 w-full max-w-6xl px-4">
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-gold/30 bg-gold/10 px-4 py-2.5 text-xs text-gold sm:text-sm"
+        >
+          <span>{message}</span>
+          <HideInNativeApp>
+            {b.canManage ? (
+              <ManageBillingButton label={FIX_PAYMENT_LABEL} primary pay />
+            ) : (
+              <Link
+                href="/dashboard/billing"
+                className="shrink-0 rounded-xl bg-primary px-3.5 py-1.5 font-semibold text-on-primary transition-colors duration-150 ease-out hover:bg-primary/90"
+              >
+                {FIX_PAYMENT_LABEL}
+              </Link>
+            )}
+          </HideInNativeApp>
+          {/* In the app: billing opens in the browser (3.1.1); an older build
+              or the kill switch off gets the factual line alone. */}
+          <ShowInNativeApp>
+            <UpgradeOnWebLink>{FIX_PAYMENT_LABEL}</UpgradeOnWebLink>
+          </ShowInNativeApp>
+        </div>
+      </div>
+    );
+  }
+
+  if (b.subscribed) return null;
   // The cheapest plan that is actually for sale: Starter once its price is
   // configured, Premium until then. `starter` is absent on an older payload.
   const from = b.starter?.billingEnabled ? b.starter.priceMonthlyUsd : b.priceMonthlyUsd;

@@ -401,6 +401,7 @@ mcpOAuthRouter.post("/authorize/approve", oauthLimiter, requireUser, async (req,
     select: {
       plan: true,
       subscriptionStatus: true,
+      pastDueSince: true,
       trialEndsAt: true,
       compAccess: true,
     },

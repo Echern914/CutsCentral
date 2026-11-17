@@ -55,6 +55,7 @@ const SHOP_SELECT = {
   loyaltyTextsEnabled: true,
   // billing gate (SMS costs real money - mirror the nudge sweep)
   subscriptionStatus: true,
+  pastDueSince: true,
   trialEndsAt: true,
   compAccess: true,
   plan: true,
@@ -79,6 +80,7 @@ type LoyaltyShop = {
   rewardsEnabled: boolean;
   loyaltyTextsEnabled: boolean;
   subscriptionStatus: string;
+  pastDueSince: Date | null;
   trialEndsAt: Date | null;
   compAccess: boolean;
   plan: string;

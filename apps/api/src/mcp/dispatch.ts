@@ -37,6 +37,7 @@ export interface McpRequestContext {
   billing: {
     plan: string;
     subscriptionStatus: string;
+    pastDueSince: Date | null;
     trialEndsAt: Date | null;
     compAccess: boolean;
   };
