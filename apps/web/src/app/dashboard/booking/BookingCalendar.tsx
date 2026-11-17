@@ -177,6 +177,13 @@ type CalendarView = (typeof VIEWS)[number]["key"];
 /** Where Week is offered: seven columns of names do not fit a phone. */
 const WEEK_QUERY = "(min-width: 1024px)";
 const VIEWS_NARROW = VIEWS.filter((v) => v.key !== "week");
+/**
+ * Where a phone's top bar ends: the dashboard header is `h-14` below `sm`. The
+ * pinned weeks (DayHeader, and the month view's below) are `top-14` to match.
+ */
+const PHONE_TOP_BAR_PX = 56;
+/** About how tall a pinned week strip is (a 44px row and its padding). */
+const PINNED_WEEK_PX = 60;
 
 /**
  * Whether the week fits this window, followed live (a window dragged
@@ -223,6 +230,7 @@ export function BookingCalendar({
   openAppointmentId,
   openDay,
   openView,
+  defaultView,
   tierOpenings = false,
   pendingWaitlistBooking = null,
   onPendingWaitlistBookingTaken,
@@ -255,8 +263,14 @@ export function BookingCalendar({
    * appointment"). Anything that isn't a date is ignored.
    */
   openDay?: string;
-  /** Open on the Day or Week view (the address remembers it, below). */
-  openView?: "day" | "week";
+  /** Open on this view (the address remembers the one chosen, below). */
+  openView?: CalendarView;
+  /**
+   * The view when nobody has chosen one: "week" on a computer (the page's
+   * guess from the request), so the desk opens on the week the website shows.
+   * Absent = the Month, as before.
+   */
+  defaultView?: "week" | "month";
   /**
    * A waitlist "Book appointment" tapped on the WAITLIST TAB, where this
    * calendar is not mounted and so could not hear the event. BookingManager
@@ -400,11 +414,17 @@ export function BookingCalendar({
   const [selectedDay, setSelectedDay] = useState<string | null>(linkedDay ?? todayKey);
   // Month overview vs one-day planner. Day view needs a day, so the switch
   // falls back to today when the month view was sitting collapsed.
-  const [view, setView] = useState<CalendarView>(openView ?? "month");
+  // `chosenView` is the one the barber picked (or a link named); null until then.
+  const [chosenView, setView] = useState<CalendarView | null>(openView ?? null);
   const shownDay = selectedDay ?? todayKey;
+  const weekFits = useWeekFits();
+  // Nothing chosen: a computer opens on the Week, and a phone - or a window
+  // too narrow for seven columns - on the Month. Until the window is measured
+  // a computer holds the week's space (below) rather than flash the month.
+  const view: CalendarView =
+    chosenView ?? (defaultView === "week" && weekFits !== false ? "week" : "month");
   // Week asked for where it does not fit (a phone opening a desktop's link,
   // a window dragged narrow) shows the Day; the choice itself is kept.
-  const weekFits = useWeekFits();
   const shownView: CalendarView = view === "week" && weekFits === false ? "day" : view;
 
   // ---- A service's own hours on a day (the gold bar) ----
@@ -793,6 +813,65 @@ export function BookingCalendar({
     return () => window.clearTimeout(timer);
   }, [selectedDay]);
 
+  /**
+   * THE OPEN DAY KEEPS ITS WEEK IN SIGHT (month view, phones). On a phone the
+   * month grid fills the screen, so a barber scrolling down a busy day soon
+   * has the grid - the only thing saying which day this is, and the way to the
+   * next one - off the top. From that point the day's week slides in under the
+   * top bar, the same strip the Day view pins, and leaves again the moment the
+   * grid is back or the day has scrolled away. A computer shows both at once,
+   * so the strip is phone-only (`sm:hidden`).
+   */
+  const monthGridRef = useRef<HTMLDivElement>(null);
+  const [weekPinned, setWeekPinned] = useState(false);
+  const monthDayOpen = shownView === "month" && selectedDay !== null;
+  useEffect(() => {
+    if (!monthDayOpen) {
+      setWeekPinned(false);
+      return;
+    }
+    let frame = 0;
+    const read = () => {
+      frame = 0;
+      const grid = monthGridRef.current?.getBoundingClientRect();
+      const wrap = plannerWrapRef.current?.getBoundingClientRect();
+      setWeekPinned(
+        !!grid &&
+          !!wrap &&
+          grid.bottom <= PHONE_TOP_BAR_PX &&
+          wrap.bottom > PHONE_TOP_BAR_PX + PINNED_WEEK_PX,
+      );
+    };
+    const onScroll = () => {
+      if (!frame) frame = window.requestAnimationFrame(read);
+    };
+    read();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [monthDayOpen]);
+
+  /**
+   * A day picked from that pinned week opens from its top, just under the
+   * strip, instead of wherever the last day had been scrolled to. Today is left
+   * to the planner's own "opens at now", exactly as a tapped cell leaves it.
+   */
+  function pickFromPinnedWeek(key: string) {
+    if (key === selectedDay) return;
+    gotoDayKey(key);
+    if (key === todayKey) return;
+    window.setTimeout(() => {
+      const el = plannerWrapRef.current;
+      if (!el) return;
+      const above = el.getBoundingClientRect().top - (PHONE_TOP_BAR_PX + PINNED_WEEK_PX);
+      if (above < 0) window.scrollBy({ top: above });
+    }, PLANNER_OPEN_MS + 100);
+  }
+
   const navBtn =
     "rounded-lg border border-subtle px-2.5 py-1.5 text-sm text-muted transition-colors hover:text-offwhite";
 
@@ -817,7 +896,9 @@ export function BookingCalendar({
   useEffect(() => {
     const url = new URL(window.location.href);
     url.searchParams.delete("appointment");
-    if (view === "day" || view === "week") url.searchParams.set("view", view);
+    // Only a CHOSEN view is written - Month included, now that a computer
+    // opens on the Week - so the default never clutters the address.
+    if (chosenView) url.searchParams.set("view", chosenView);
     else url.searchParams.delete("view");
     if (selectedDay && selectedDay !== todayKey) url.searchParams.set("day", selectedDay);
     else url.searchParams.delete("day");
@@ -825,7 +906,7 @@ export function BookingCalendar({
     if (next !== window.location.pathname + window.location.search) {
       window.history.replaceState(window.history.state, "", next);
     }
-  }, [view, selectedDay, todayKey]);
+  }, [chosenView, selectedDay, todayKey]);
   // Opened on a linked day in another month: load that month, and the
   // booking's sheet opens as soon as its row arrives (deepLinkedRow below).
   useEffect(() => {
@@ -1075,7 +1156,7 @@ export function BookingCalendar({
       </div>
 
       {/* Day grid */}
-      <div className="mt-1 grid grid-cols-7 gap-1">
+      <div ref={monthGridRef} data-qa="month-grid" className="mt-1 grid grid-cols-7 gap-1">
         {weeks.flat().map((cell) => {
           if (!cell) return <div key={Math.random()} />;
           const { key, dayNum, inMonth } = cell;
@@ -1157,6 +1238,26 @@ export function BookingCalendar({
 
       {/* Expanded day planner. scroll-mt clears the sticky top bar. */}
       <div ref={plannerWrapRef} data-qa="month-day-planner-wrap" className="scroll-mt-20">
+      {/* The open day's week, once the grid has scrolled away (phones; see
+          weekPinned). A zero-height sticky anchor takes no room in the page;
+          the strip hangs from it over the planner, just under the top bar. */}
+      <div className="sticky top-14 z-[15] h-0 sm:hidden">
+        <AnimatePresence>
+          {weekPinned && (
+            <motion.div
+              key="pinned-week"
+              data-qa="month-pinned-week"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.15, ease: "easeOut" }}
+              className="-mx-1 rounded-xl border border-subtle bg-charcoal-800/90 px-1 py-1.5 shadow-sm backdrop-blur"
+            >
+              <WeekStrip days={weekDays} shownDay={shownDay} todayKey={todayKey} onPick={pickFromPinnedWeek} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
       <AnimatePresence initial={false}>
         {selectedDay && (
           <motion.div
@@ -1563,8 +1664,11 @@ function WeekStrip({
  * hand-maintaining a pixel offset that silently breaks the moment either one
  * changes height.
  *
- * Sits below the dashboard header (which is `sticky top-0 z-20`) at a lower z,
- * so it slides under rather than over it.
+ * Sits right below the dashboard header (which is `sticky top-0 z-20`, 56px
+ * tall on a phone and 64px from `sm`; `top-16` everywhere left a strip of
+ * appointments showing through between the two on a phone) at a lower z, so
+ * it slides under rather than over it. Above the planner's own z-10 chips,
+ * which would otherwise scroll over it.
  *
  * The total here is deliberately the headline only. The full breakdown - done
  * vs to come, unpriced, awaiting approval, no-shows, and the to-fill chips -
@@ -1588,7 +1692,7 @@ function DayHeader({
   const showTotal =
     totals.count > 0 || totals.revenue > 0 || totals.blockedMin > 0;
   return (
-    <div className="sticky top-16 z-10 -mx-1 mb-3 rounded-xl bg-charcoal-800/80 px-1 py-1.5 backdrop-blur">
+    <div className="sticky top-14 z-[15] -mx-1 mb-3 rounded-xl bg-charcoal-800/80 px-1 py-1.5 backdrop-blur sm:top-16">
       <WeekStrip days={days} shownDay={shownDay} todayKey={todayKey} onPick={onPick} />
       {showTotal && (
         <div className="mt-1.5 flex items-center justify-between gap-3 border-t border-subtle px-1.5 pt-1.5">
@@ -2281,9 +2385,10 @@ function DayPlanner({
   // Where a scrolled-to row comes to rest: below whatever is pinned over the
   // top of the page, or "now" lands underneath it. In the month view that is
   // the dashboard's sticky top bar (about 4rem). The day view also pins its
-  // week strip and total just under that bar (DayHeader, `top-16`, up to about
-  // 6rem tall), so it needs the bigger margin.
-  const rowScrollMargin = standalone ? "scroll-mt-44" : "scroll-mt-20";
+  // week strip and total just under that bar (DayHeader, `top-14`/`top-16`, up
+  // to about 6rem tall), so it needs the bigger margin. On a phone the month
+  // view's open day can pin its week too (weekPinned), so it clears that.
+  const rowScrollMargin = standalone ? "scroll-mt-44" : "scroll-mt-32 sm:scroll-mt-20";
 
   // ---- Day summary (the totals footer) ----
   // Shared with the pinned header above the planner (see DayHeader): two copies
