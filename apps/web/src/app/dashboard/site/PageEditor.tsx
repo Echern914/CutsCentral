@@ -72,6 +72,8 @@ const FIELD_LABELS: Record<string, string> = {
   fontKey: "Typography",
   layoutStyle: "Shape",
   sectionOrder: "Sections",
+  pageShowsServices: "Services on your page",
+  pageShowsDirections: "Directions button",
   rewardsSections: "Rewards sections",
   publicPageEnabled: "Live toggle",
   takesRequests: "Requests toggle",
@@ -125,6 +127,10 @@ export function PageEditor({
   const [sectionOrder, setSectionOrder] = useState<PageSectionKey[]>(
     settings.sectionOrder?.length ? (settings.sectionOrder as PageSectionKey[]) : DEFAULT_SECTION_ORDER,
   );
+  // Absent on an older payload: the menu shows, as it always did.
+  const [pageShowsServices, setPageShowsServices] = useState(settings.pageShowsServices !== false);
+  // Off unless the barber turned it on (an older payload: off).
+  const [pageShowsDirections, setPageShowsDirections] = useState(settings.pageShowsDirections === true);
   const [rewardsWelcome, setRewardsWelcome] = useState(settings.rewardsWelcome ?? "");
   const [rewardsSections, setRewardsSections] = useState<RewardsSectionKey[]>(
     settings.rewardsSections?.length
@@ -202,6 +208,8 @@ export function PageEditor({
     fontKey,
     layoutStyle,
     sectionOrder,
+    pageShowsServices,
+    pageShowsDirections,
     rewardsWelcome: rewardsWelcome.trim(),
     rewardsSections,
     takesRequests,
@@ -278,6 +286,8 @@ export function PageEditor({
       fontKey,
       layoutStyle,
       sectionOrder,
+      showServices: pageShowsServices,
+      showDirections: pageShowsDirections,
       bookingUrl: settings.bookingUrl,
       bookingMode: settings.bookingMode,
       takesRequests,
@@ -320,6 +330,8 @@ export function PageEditor({
       fontKey,
       layoutStyle,
       sectionOrder,
+      pageShowsServices,
+      pageShowsDirections,
       takesRequests,
       waitlistEnabled,
     ],
@@ -760,6 +772,35 @@ export function PageEditor({
                   {addressPrivate ? "On" : "Off"}
                 </button>
               </div>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm text-offwhite">Directions button on my page</p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    {!pageShowsDirections
+                      ? "Off: your page has no Directions button."
+                      : !addressStreet.trim()
+                        ? "Add your street address above, or the button stays hidden."
+                        : addressPrivate
+                          ? "Hidden while your street address is private."
+                          : "Opens your street address in the client's maps app."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={pageShowsDirections}
+                  aria-label="Directions button on my page"
+                  onClick={() => setPageShowsDirections((v) => !v)}
+                  className={cn(
+                    "shrink-0 rounded-md px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
+                    pageShowsDirections
+                      ? "bg-emerald-soft/15 text-emerald-soft"
+                      : "border border-subtle text-muted hover:bg-charcoal-700",
+                  )}
+                >
+                  {pageShowsDirections ? "On" : "Off"}
+                </button>
+              </div>
             </div>
           </div>
         </Card>
@@ -820,6 +861,29 @@ export function PageEditor({
               <p className="mt-1.5 text-[11px] text-muted">
                 Your newest photos show as Recent work near the top of your page, so these sections follow below them.
               </p>
+            </div>
+            <div className="flex items-center justify-between gap-3 border-b border-subtle pb-5">
+              <div className="min-w-0">
+                <p className="text-sm text-offwhite">Services</p>
+                <p className="mt-0.5 text-xs text-muted">
+                  {pageShowsServices
+                    ? "Your services and prices are listed on your page, each one tappable to book."
+                    : "Off: your page shows a big Book button under your name instead. Clients still pick a service when they book."}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-pressed={pageShowsServices}
+                onClick={() => setPageShowsServices((v) => !v)}
+                className={cn(
+                  "shrink-0 rounded-md px-4 py-2 text-xs font-medium transition-colors duration-150 ease-out",
+                  pageShowsServices
+                    ? "bg-emerald-soft/15 text-emerald-soft"
+                    : "border border-subtle text-muted hover:bg-charcoal-700",
+                )}
+              >
+                {pageShowsServices ? "Shown" : "Hidden"}
+              </button>
             </div>
             <SectionOrderEditor value={sectionOrder} onChange={setSectionOrder} />
           </div>

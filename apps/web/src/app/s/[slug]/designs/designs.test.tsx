@@ -239,6 +239,24 @@ describe("studio", () => {
     expect(screen.queryByText("The team")).toBeNull();
   });
 
+  it("🔴 a shop that hides its services: no menu, no pinned price bar, one Book button under the header", () => {
+    render(<ShopPageClient data={page({ showServices: false })} />);
+    expect(screen.queryByText("Services")).toBeNull();
+    expect(screen.queryByText("Beard Trim")).toBeNull();
+    expect(screen.queryByText("From")).toBeNull();
+    const book = screen.getAllByRole("link", { name: "Book an appointment" });
+    expect(book).toHaveLength(1);
+    expect(book[0]!.getAttribute("href")).toBe("/book/fresh");
+  });
+
+  it("an older payload with no showServices still shows the menu", () => {
+    const data = page();
+    delete (data as { showServices?: boolean }).showServices;
+    render(<ShopPageClient data={data} />);
+    expect(screen.getByText("Services")).toBeTruthy();
+    expect(screen.getByText("From")).toBeTruthy();
+  });
+
   it("🔴 Book is pinned once, with the lowest price beside it - not repeated at the top", () => {
     render(<ShopPageClient data={page()} />);
     const book = screen.getAllByRole("link", { name: "Book an appointment" });
@@ -268,6 +286,7 @@ describe("studio", () => {
     render(
       <ShopPageClient
         data={page({
+          showDirections: true,
           addressStreet: "12 Main St",
           addressCity: "Hoboken",
           addressRegion: "NJ",
@@ -276,12 +295,51 @@ describe("studio", () => {
       />,
     );
     const directions = screen.getByRole("link", { name: "Directions to Fresh Studio" }).getAttribute("href")!;
-    expect(decodeURIComponent(directions)).toContain("Fresh Studio, 12 Main St, Hoboken, NJ");
+    // The address alone: the shop's name in the search made the map guess.
+    expect(decodeURIComponent(directions)).toContain("query=12 Main St, Hoboken, NJ");
+    expect(decodeURIComponent(directions)).not.toContain("Fresh Studio");
     expect(screen.getByRole("link", { name: "Fresh Studio on Instagram" }).getAttribute("href")).toBe(
       "https://instagram.com/freshstudio",
     );
     expect(screen.queryByRole("link", { name: "Text Fresh Studio" })).toBeNull();
     expect(screen.getByText("Hoboken, NJ")).toBeTruthy();
+  });
+
+  it("🔴 Directions is off until the barber turns it on, even with a full address", () => {
+    const full = { addressStreet: "12 Main St", addressCity: "Hoboken", addressRegion: "NJ" };
+    const { unmount } = render(<ShopPageClient data={page(full)} />);
+    expect(screen.queryByRole("link", { name: /Directions to/ })).toBeNull();
+    unmount();
+    // An older payload without the switch: off as well.
+    const { unmount: u2 } = render(<ShopPageClient data={page({ ...full, showDirections: undefined })} />);
+    expect(screen.queryByRole("link", { name: /Directions to/ })).toBeNull();
+    u2();
+    render(<ShopPageClient data={page({ ...full, showDirections: true })} />);
+    expect(screen.getByRole("link", { name: "Directions to Fresh Studio" })).toBeTruthy();
+  });
+
+  it("🔴 a city alone, or a private street, gives no Directions to guess at", () => {
+    // A private address reaches the page as city + region only.
+    render(<ShopPageClient data={page({ showDirections: true, addressStreet: null, addressCity: "Paterson", addressRegion: "NJ" })} />);
+    expect(screen.queryByRole("link", { name: /Directions to/ })).toBeNull();
+  });
+
+  it("🔴 an app build that would open the map inside itself gets no Directions", async () => {
+    const w = window as unknown as { __cbNative?: object; ReactNativeWebView?: unknown };
+    w.ReactNativeWebView = { postMessage() {} };
+    w.__cbNative = { openAuth: true };
+    try {
+      const full = { showDirections: true, addressStreet: "12 Main St", addressCity: "Hoboken" };
+      const { unmount } = render(<ShopPageClient data={page(full)} />);
+      expect(screen.queryByRole("link", { name: /Directions to/ })).toBeNull();
+      unmount();
+      w.__cbNative = { openAuth: true, externalMaps: true };
+      render(<ShopPageClient data={page(full)} />);
+      expect(screen.getByRole("link", { name: "Directions to Fresh Studio" })).toBeTruthy();
+    } finally {
+      delete w.__cbNative;
+      delete w.ReactNativeWebView;
+    }
   });
 
   describe("Share", () => {

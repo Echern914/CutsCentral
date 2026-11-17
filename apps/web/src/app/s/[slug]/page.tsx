@@ -83,6 +83,10 @@ export interface ShopPageData {
   fontKey: string | null;
   layoutStyle: string | null;
   sectionOrder: string[];
+  /** Off = no services menu on the page, Book under the header. Absent on an older payload = on. */
+  showServices?: boolean;
+  /** Off unless the barber turned Directions on (older payloads: off too). */
+  showDirections?: boolean;
   bookingUrl: string | null;
   bookingMode: BookingModeKey;
   takesRequests: boolean;

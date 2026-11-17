@@ -14,7 +14,7 @@ import { WebView, type WebViewProps } from "react-native-webview";
 import * as WebBrowser from "expo-web-browser";
 import { setStatusBarStyle } from "expo-status-bar";
 import { API_ORIGIN, NEXT_UP_WIDGET_ENABLED, WEB_ORIGIN } from "@/src/config";
-import { nativeCapabilities, parseOpenAuthRequest, parseOpenWebRequest, resumeUrl } from "@/src/nativeBridge";
+import { isMapsUrl, nativeCapabilities, parseOpenAuthRequest, parseOpenWebRequest, resumeUrl } from "@/src/nativeBridge";
 import { FRAME, PAGE_BAR } from "@/src/frameColors";
 import { ALIVE_PING, ALIVE_PROBE_JS, ALIVE_TIMEOUT_MS, shouldProbeOnReturn, shouldReloadOnReturn } from "@/src/staleReturn";
 
@@ -491,13 +491,20 @@ export function AppWebView({
         onContentProcessDidTerminate={onProcessGone}
         onRenderProcessGone={onProcessGone}
         // One navigation policy, three layers in order:
-        //  1. mailto:/tel:/etc go to iOS (Mail, Phone), never into the WebView;
+        //  1. mailto:/tel:/etc go to iOS (Mail, Phone), never into the WebView,
+        //     and so do maps links (the maps app);
         //  2. the caller's policy (e.g. barber.tsx bounces web /login to the
         //     native sign-in screen);
         //  3. the marketing/auth backstop - forbidden pages open in Safari.
         // isTopFrame is iOS-only; treat undefined (Android) as a main frame.
         onShouldStartLoadWithRequest={(req) => {
           if (EXTERNAL_SCHEME.test(req.url)) {
+            Linking.openURL(req.url).catch(() => {});
+            return false;
+          }
+          // Directions open in the maps app, never in here: a map inside the
+          // WebView had no way back to the app (isMapsUrl).
+          if (req.isTopFrame !== false && isMapsUrl(req.url)) {
             Linking.openURL(req.url).catch(() => {});
             return false;
           }

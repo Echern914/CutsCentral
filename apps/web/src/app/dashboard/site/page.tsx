@@ -40,6 +40,8 @@ export interface ShopPageSettings {
   fontKey: string | null;
   layoutStyle: string | null;
   sectionOrder: string[];
+  pageShowsServices: boolean;
+  pageShowsDirections: boolean;
   // Client rewards page content control.
   rewardsWelcome: string | null;
   rewardsSections: string[];

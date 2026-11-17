@@ -349,6 +349,10 @@ const updateShopSchema = createShopSchema
     // Section render order/visibility. De-duped, known keys only, capped to the
     // number of real sections. [] = "use the default order" (handled on render).
     sectionOrder: z.array(z.enum(PAGE_SECTION_KEYS as [string, ...string[]])).max(PAGE_SECTION_KEYS.length),
+    // The services menu on the public page (off = Book under the header instead).
+    pageShowsServices: z.boolean(),
+    // The Directions button (off by default; needs a public street to show).
+    pageShowsDirections: z.boolean(),
     // Lead form: when on, the public page shows "Request an appointment".
     // notifyPhone is texted on each new lead (normalized to E.164 below); ""/null
     // = inbox only.
@@ -1290,6 +1294,10 @@ publicPageRouter.get("/:slug", async (req, res) => {
     fontKey: shop.fontKey,
     layoutStyle: shop.layoutStyle,
     sectionOrder: readSectionOrder(shop.sectionOrder),
+    // The barber's choice to leave the services menu off the page.
+    showServices: shop.pageShowsServices,
+    // The barber's choice to offer Directions (off unless turned on).
+    showDirections: shop.pageShowsDirections,
     bookingUrl: shop.bookingUrl,
     // When native booking is on, the page CTA points at /book/[slug] instead of
     // the external bookingUrl, and the lead form is hidden.
@@ -1928,6 +1936,8 @@ function serializeShop(shop: {
   fontKey: string | null;
   layoutStyle: string | null;
   sectionOrder: string[];
+  pageShowsServices: boolean;
+  pageShowsDirections: boolean;
   rewardsWelcome: string | null;
   rewardsSections: string[];
   takesRequests: boolean;
@@ -2007,6 +2017,8 @@ function serializeShop(shop: {
     fontKey: shop.fontKey,
     layoutStyle: shop.layoutStyle,
     sectionOrder: readSectionOrder(shop.sectionOrder),
+    pageShowsServices: shop.pageShowsServices,
+    pageShowsDirections: shop.pageShowsDirections,
     rewardsWelcome: shop.rewardsWelcome,
     rewardsSections: readRewardsSections(shop.rewardsSections),
     takesRequests: shop.takesRequests,

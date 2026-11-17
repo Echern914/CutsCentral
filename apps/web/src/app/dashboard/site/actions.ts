@@ -28,6 +28,8 @@ export interface PageSettingsInput {
   fontKey: string;
   layoutStyle: string;
   sectionOrder: string[];
+  pageShowsServices: boolean;
+  pageShowsDirections: boolean;
   rewardsWelcome: string;
   rewardsSections: string[];
   takesRequests: boolean;
@@ -72,6 +74,8 @@ const PAGE_FIELDS = [
   "fontKey",
   "layoutStyle",
   "sectionOrder",
+  "pageShowsServices",
+  "pageShowsDirections",
   "rewardsWelcome",
   "rewardsSections",
   "takesRequests",

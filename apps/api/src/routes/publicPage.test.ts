@@ -112,6 +112,50 @@ describe("public shop page", () => {
     expect(page.body.gallery[0]).toEqual({ url: "https://img.test/one.jpg" });
   });
 
+  it("the services menu is on by default, and a shop can take it off its page", async () => {
+    let page = await request(app).get(`/api/page/${slugA}`);
+    expect(page.body.showServices).toBe(true);
+
+    const off = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({ pageShowsServices: false });
+    expect(off.status).toBe(200);
+    expect(off.body.pageShowsServices).toBe(false);
+    page = await request(app).get(`/api/page/${slugA}`);
+    expect(page.body.showServices).toBe(false);
+
+    const on = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({ pageShowsServices: true });
+    expect(on.body.pageShowsServices).toBe(true);
+    page = await request(app).get(`/api/page/${slugA}`);
+    expect(page.body.showServices).toBe(true);
+  });
+
+  it("🔴 Directions is off by default, and a shop can turn it on", async () => {
+    let page = await request(app).get(`/api/page/${slugA}`);
+    expect(page.body.showDirections).toBe(false);
+
+    const on = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({ pageShowsDirections: true });
+    expect(on.status).toBe(200);
+    expect(on.body.pageShowsDirections).toBe(true);
+    page = await request(app).get(`/api/page/${slugA}`);
+    expect(page.body.showDirections).toBe(true);
+
+    const off = await request(app)
+      .patch("/api/shops/me")
+      .set("Cookie", cookieA)
+      .send({ pageShowsDirections: false });
+    expect(off.body.pageShowsDirections).toBe(false);
+    page = await request(app).get(`/api/page/${slugA}`);
+    expect(page.body.showDirections).toBe(false);
+  });
+
   it("gallery with captions + style fields save and round-trip", async () => {
     const patch = await request(app)
       .patch("/api/shops/me")
