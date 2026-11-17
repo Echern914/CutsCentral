@@ -1,43 +1,46 @@
 import { Platform, type TextStyle } from "react-native";
 
 /**
- * My ChairBack's visual system.
+ * My ChairBack's visual system: Studio, the same look as the web
+ * (apps/web globals.css :root, the 2026-11-16 redesign).
  *
- * The same white and gold the rest of ChairBack speaks (web globals.css
- * --cb-* tokens; the role picker's COLORS), spent with restraint: gold is for
- * the one primary action on a screen, progress, and the brand mark - never a
- * wash, never a glow. Separation comes from surfaces and hairlines, not
- * shadows. Status is carried by a WORD plus a small dot, never by colour
- * alone, and red is deliberately absent: a no-show is a muted coral, a
- * cancellation a quiet grey.
+ * Paper and ink. The ONE primary action on a screen is an ink button with
+ * white text; gold is an accent only - links, the selected tab, progress,
+ * stamps - never a button fill. Separation comes from white surfaces and
+ * hairlines, not shadows. Status is carried by a WORD plus a small dot, never
+ * by colour alone.
  */
 export const color = {
-  // White & gold - ChairBack's main look since 2026-10-17, matching the web's
-  // light tokens (apps/web globals.css :root).
-  bg: "#FAF8F3",
+  bg: "#F6F4EF", // paper
   surface: "#FFFFFF",
-  surfaceRaised: "#F4F0E7",
-  surfacePressed: "#EDE8DC",
-  hairline: "rgba(28,25,23,0.12)",
-  hairlineStrong: "rgba(28,25,23,0.2)",
-  text: "#1C1917",
-  textSecondary: "#57534E",
-  textTertiary: "#78716C",
-  gold: "#D4AF37",
-  // Gold as TEXT: the deep gold, readable on white (the bright metal is ~1.9:1).
-  goldText: "#9A7A1F",
-  goldTint: "rgba(154,122,31,0.12)",
-  onGold: "#1C1917",
-  focus: "#9A7A1F",
+  // Field: tiles, secondary buttons, tracks (web s700).
+  surfaceRaised: "#EFECE5",
+  surfacePressed: "#E6E2D9",
+  hairline: "rgba(26,24,20,0.11)",
+  hairlineStrong: "rgba(26,24,20,0.18)",
+  text: "#1A1814", // ink
+  textSecondary: "#5E5850",
+  textTertiary: "#776F64",
+  // The primary button: ink with white text.
+  primary: "#1A1814",
+  primaryPressed: "#38342D",
+  onPrimary: "#FFFFFF",
+  // Gold FILL: stamps, progress, the unread dot. Ink text on it.
+  gold: "#C19A3B",
+  // Gold as TEXT: gold ink, readable on white (~5.4:1).
+  goldText: "#8A6914",
+  goldTint: "rgba(138,105,20,0.10)",
+  onGold: "#1A1814",
+  focus: "#8A6914",
 } as const;
 
-/** The dot beside each status word. Muted, and never the only signal. */
+/** The dot beside each status word: the web's status colours. Never the only signal. */
 export const statusColor = {
-  requested: "#B45309",
-  booked: "#9A7A1F",
-  completed: "#15803D",
-  canceled: "#78716C",
-  no_show: "#C2410C",
+  requested: "#9A5B0B",
+  booked: "#8A6914",
+  completed: "#1E7A4C",
+  canceled: "#776F64",
+  no_show: "#B3261E",
 } as const;
 
 /** 8-point spacing. `half` exists for the few optical adjustments that need it. */
@@ -51,10 +54,11 @@ export const space = {
   s6: 48,
 } as const;
 
+// Studio's radius scale (web rounded-xl 10, 2xl 14, 3xl 16, 4xl 20).
 export const radius = {
   sm: 8,
-  md: 12,
-  lg: 16,
+  md: 10,
+  lg: 14,
   xl: 20,
   pill: 999,
 } as const;
@@ -92,5 +96,9 @@ export const type = {
 
 export type TypeStyle = keyof typeof type;
 
-/** The brand display face, loaded by the root layout; system face if it failed. */
-export const WORDMARK_FONT = "BricolageGrotesque_700Bold";
+/**
+ * The wordmark face. Studio draws ChairBack in the system face, semibold and
+ * tight (the web's Inter 600, -0.02em); Bricolage is kept for shop pages.
+ * Undefined = the system font.
+ */
+export const WORDMARK_FONT: string | undefined = undefined;

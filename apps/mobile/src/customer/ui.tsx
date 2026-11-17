@@ -67,7 +67,7 @@ export function Txt({
   ...rest
 }: TextProps & {
   variant?: TypeStyle;
-  tone?: "primary" | "secondary" | "tertiary" | "gold" | "onGold";
+  tone?: "primary" | "secondary" | "tertiary" | "gold" | "onGold" | "onPrimary";
 }) {
   const toneColor = {
     primary: color.text,
@@ -75,6 +75,7 @@ export function Txt({
     tertiary: color.textTertiary,
     gold: color.goldText,
     onGold: color.onGold,
+    onPrimary: color.onPrimary,
   }[tone];
   return <Text {...rest} style={[type[variant], { color: toneColor }, style]} />;
 }
@@ -87,7 +88,7 @@ export function Wordmark({ size = 20 }: { size?: number }) {
       // The mark is a logo, not prose: it holds its size so the header row
       // stays one row at every text size.
       allowFontScaling={false}
-      style={{ fontFamily: WORDMARK_FONT, fontSize: size, color: color.goldText, letterSpacing: 0.2 }}
+      style={{ fontFamily: WORDMARK_FONT, fontSize: size, fontWeight: "700", color: color.text, letterSpacing: -0.02 * size }}
     >
       ChairBack
     </Text>
@@ -165,8 +166,8 @@ export function Button({
   icon?: ReactNode;
   style?: StyleProp<ViewStyle>;
 }) {
-  // A disabled primary is drawn neutral, not as dimmed gold (which reads as a
-  // muddy brown and still looks like "the" action).
+  // A disabled primary is drawn neutral, not as a dimmed ink slab that still
+  // looks like "the" action.
   const inactivePrimary = variant === "primary" && disabled;
   const base = inactivePrimary
     ? styles.btnPrimaryDisabled
@@ -175,7 +176,7 @@ export function Button({
       : variant === "secondary"
         ? styles.btnSecondary
         : styles.btnPlain;
-  const tone = inactivePrimary ? "tertiary" : variant === "primary" ? "onGold" : variant === "plain" ? "gold" : "primary";
+  const tone = inactivePrimary ? "tertiary" : variant === "primary" ? "onPrimary" : variant === "plain" ? "gold" : "primary";
   return (
     <Tap
       onPress={busy ? undefined : onPress}
@@ -187,7 +188,7 @@ export function Button({
       pressedStyle={variant === "primary" ? styles.btnPrimaryPressed : styles.pressed}
     >
       {busy ? (
-        <ActivityIndicator color={variant === "primary" ? color.onGold : color.goldText} />
+        <ActivityIndicator color={variant === "primary" ? color.onPrimary : color.goldText} />
       ) : (
         <View style={styles.btnInner}>
           {icon}
@@ -519,8 +520,8 @@ const styles = StyleSheet.create({
   },
   btnInner: { flexDirection: "row", alignItems: "center", gap: space.s1 },
   btnLabel: { textAlign: "center" },
-  btnPrimary: { backgroundColor: color.gold },
-  btnPrimaryPressed: { backgroundColor: "#C19F31" },
+  btnPrimary: { backgroundColor: color.primary },
+  btnPrimaryPressed: { backgroundColor: color.primaryPressed },
   btnPrimaryDisabled: {
     backgroundColor: color.surfaceRaised,
     borderWidth: StyleSheet.hairlineWidth,
@@ -567,7 +568,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(212,175,55,0.28)",
+    borderColor: "rgba(138,105,20,0.24)",
   },
   monogramText: { color: color.goldText, fontWeight: "700" },
 
