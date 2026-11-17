@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import type { BookingModeKey } from "@chairback/config/constants";
 import { API_BASE, apiGet } from "@/lib/api";
+import { defaultCalendarView } from "@/lib/calendarDefault";
 import { DemoTour } from "@/components/tour/DemoTour";
 import { BookingManager } from "./BookingManager";
 import type { SquareSyncStatus } from "./squareSyncStatus";
@@ -415,7 +417,12 @@ export default async function BookingPage({
         initialTab={searchParams?.tab}
         openAppointmentId={searchParams?.appointment}
         openDay={searchParams?.day}
-        openView={searchParams?.view === "day" || searchParams?.view === "week" ? searchParams.view : undefined}
+        openView={
+          searchParams?.view === "day" || searchParams?.view === "week" || searchParams?.view === "month"
+            ? searchParams.view
+            : undefined
+        }
+        defaultView={defaultCalendarView(headers().get("user-agent"))}
         appBase={process.env.APP_BASE_URL ?? ""}
         apiBase={API_BASE}
         connect={connect}

@@ -244,6 +244,7 @@ export function BookingManager({
   openAppointmentId,
   openDay,
   openView,
+  defaultView,
   initialAgenda,
   initialWaitlist,
 }: {
@@ -264,8 +265,10 @@ export function BookingManager({
   openAppointmentId?: string;
   /** Its shop-local day (YYYY-MM-DD), so the calendar opens on it. */
   openDay?: string;
-  /** "day" when the address says the calendar was on its Day view. */
-  openView?: "day" | "week";
+  /** The view the address says the calendar was on. */
+  openView?: "day" | "week" | "month";
+  /** What it opens on when the address names none: Week on a computer. */
+  defaultView?: "week" | "month";
   initialAgenda: AgendaResponse;
   initialWaitlist: WaitlistRow[];
 }) {
@@ -467,6 +470,7 @@ export function BookingManager({
               openAppointmentId={openAppointmentId}
               openDay={openDay}
               openView={openView}
+              defaultView={defaultView}
               tierOpenings={shop.rewardsEnabled}
               offersEnabled={Boolean(shop.offersEnabled)}
               pendingWaitlistBooking={waitlistHandoff.pending}

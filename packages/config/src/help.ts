@@ -1692,7 +1692,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "see-the-day",
     q: "How do I see tomorrow's appointments?",
-    a: "The calendar has a Day view beside the month — pick the date and you get that day as a single column, chair by chair, in order.\n\nThe dashboard home also opens on today's agenda, so the first thing you see each morning is who's coming in.",
+    a: "On a computer the calendar opens on the Week, so tomorrow is right there beside today — click its date to open it on its own. On a phone, tap tomorrow on the month, or switch to Day: you get that day as a single column, chair by chair, in order.\n\nThe dashboard home also opens on today's agenda, so the first thing you see each morning is who's coming in.",
     keywords: [
       "tomorrow", "todays appointments", "today's list", "day view", "whats my day",
       "schedule for", "who's coming in", "whos coming", "my day", "agenda", "next day",

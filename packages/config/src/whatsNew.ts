@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-16-calendar-opens-on-week",
+    date: "2026-11-16",
+    kind: "feature",
+    title: "The calendar opens on the week on a computer",
+    body:
+      "On a computer, the calendar now opens on the Week view. Month and Day are one click away, and the one " +
+      "you pick is remembered. On a phone, scroll down a day's appointments in Month view and that day's week " +
+      "now stays at the top, so you can see the day and tap the next one.",
+  },
+  {
     id: "2026-11-16-studio-page-for-everyone",
     date: "2026-11-16",
     kind: "feature",
