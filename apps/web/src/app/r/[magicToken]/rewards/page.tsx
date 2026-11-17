@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { APP_NAME, type CadenceKey } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
+import { keepTokenPageOnDomain } from "@/lib/customDomainVisit";
 import { RewardsClient } from "../RewardsClient";
 
 export interface RewardsData {
@@ -191,6 +192,10 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const data = await getData(params.magicToken);
   if (!data) return { title: APP_NAME };
+  // 🔴 Checked here too, before the title (which carries the punch count) is
+  // written: under the route's loading.tsx the page body streams after a 200,
+  // so only a redirect from metadata is a real one. See ../page.tsx.
+  await keepTokenPageOnDomain(data.shop.pageSlug, `/r/${params.magicToken}/rewards`);
   const title = `${data.shop.name} Rewards`;
   const ready = data.rewards.filter((r) => r.ready).length;
   const description = ready > 0
@@ -229,6 +234,9 @@ export default async function RewardsPage({
 }) {
   const data = await getData(params.magicToken);
   if (!data) notFound();
+  // On a shop's own domain only that shop's card shows here; any other goes
+  // to the same page on getchairback.com (lib/customDomainVisit.ts).
+  await keepTokenPageOnDomain(data.shop.pageSlug, `/r/${params.magicToken}/rewards`);
   // VAPID public key (safe to expose - it's a PUBLIC key) threaded to the client
   // so the push opt-in can subscribe. Absent => the push UI stays hidden and
   // everything falls back to SMS.

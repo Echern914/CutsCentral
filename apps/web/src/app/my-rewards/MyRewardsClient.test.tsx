@@ -117,7 +117,7 @@ describe("MyRewardsClient", () => {
     select.mockResolvedValue(ok({ ok: true, url: "https://app.test/r/tok123/rewards" }) as never);
     const assign = vi.fn();
     Object.defineProperty(window, "location", {
-      value: { assign },
+      value: { assign, host: "getchairback.com" },
       writable: true,
     });
 
@@ -125,6 +125,31 @@ describe("MyRewardsClient", () => {
     fireEvent.click(screen.getByText(/^verify$/i));
     fireEvent.click(await screen.findByText(/alpha cuts/i));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app.test/r/tok123/rewards"));
+  });
+
+  it("🔴 on a shop's own domain, the card opens right there - the client stays on the domain", async () => {
+    await toCodeStep();
+    verify.mockResolvedValue(ok({ verified: true, proof: "p".repeat(24) }) as never);
+    shopsFn.mockResolvedValue(
+      ok({
+        shops: [
+          { selectionId: "a".repeat(32), name: "Alpha Cuts", logoUrl: null, industry: "barber", city: "Albany", region: "NY" },
+        ],
+      }) as never,
+    );
+    // The API names the card on getchairback.com; the page it opens on the
+    // domain shows it only if Alpha Cuts owns the domain (customDomainVisit).
+    select.mockResolvedValue(ok({ ok: true, url: "https://getchairback.com/r/tok123/rewards" }) as never);
+    const assign = vi.fn();
+    Object.defineProperty(window, "location", {
+      value: { assign, host: "alphacuts.com" },
+      writable: true,
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("••••••"), { target: { value: "424242" } });
+    fireEvent.click(screen.getByText(/^verify$/i));
+    fireEvent.click(await screen.findByText(/alpha cuts/i));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/r/tok123/rewards"));
   });
 
   it("🔴 a shop where more than one person has this number is NOT a button - it says to ask the shop", async () => {

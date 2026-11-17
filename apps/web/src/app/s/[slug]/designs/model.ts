@@ -26,6 +26,8 @@ export interface DesignCtx {
   hasBooking: boolean;
   showRequestForm: boolean;
   bookQuery?: string;
+  /** Where native booking lives on this site: /book/<slug>, or /book on the shop's own domain (ShopPageClient). */
+  bookPath?: string;
   /** Where links to ChairBack itself point: "" here, the platform on a shop's own domain (ShopPageClient). */
   platformOrigin?: string;
   rewardsHref?: string;
@@ -46,12 +48,12 @@ export interface DesignCtx {
  * Booking with this service (and who did it) already picked. A prefill, never
  * a permission: the booking page validates both ids against what the shop
  * offers and ignores anything else (book/[slug]/page.tsx). An outside booking
- * site can't take our ids, so it gets its own link as it is; a custom-domain
- * visit keeps its same-shop marker, and on the shop's own domain the link
- * goes to booking on the platform, as Book does.
+ * site can't take our ids, so it gets its own link as it is; the page's own
+ * query (a handoff from the app) rides along, and on the shop's own domain
+ * the link stays on that domain, as Book does.
  */
 export function bookPickedHref(
-  ctx: Pick<DesignCtx, "bookHref" | "bookIsNative" | "bookQuery" | "platformOrigin" | "data">,
+  ctx: Pick<DesignCtx, "bookHref" | "bookIsNative" | "bookQuery" | "bookPath" | "data">,
   pick: { serviceId?: string; staffId?: string },
 ): string | null {
   if (!ctx.bookHref) return null;
@@ -60,7 +62,7 @@ export function bookPickedHref(
   if (pick.serviceId) query.set("service", pick.serviceId);
   if (pick.staffId) query.set("staff", pick.staffId);
   const q = query.toString();
-  return `${ctx.platformOrigin ?? ""}/book/${ctx.data.slug}${q ? `?${q}` : ""}`;
+  return `${ctx.bookPath ?? `/book/${ctx.data.slug}`}${q ? `?${q}` : ""}`;
 }
 
 // ---------------------------------------------------------------------------

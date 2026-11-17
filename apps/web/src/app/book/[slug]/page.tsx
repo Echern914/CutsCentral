@@ -5,7 +5,8 @@ import { BOOKING_HANDOFF_PARAM, bookingHandoffFrom } from "@chairback/config/boo
 import type { BusinessVocabulary } from "@chairback/config/businessTypes";
 import type { BookingPageLocation } from "@chairback/config/shopAddress";
 import { apiPublicGet } from "@/lib/api";
-import { expectedDomain, servesDomain } from "@/lib/customDomainGuard";
+import { servesDomain } from "@/lib/customDomainGuard";
+import { expectedDomainForVisit, visitDomain } from "@/lib/customDomainVisit";
 import { BookingClient } from "./BookingClient";
 import { loadHiddenShop } from "@/app/s/[slug]/shopPage";
 import { HiddenShopNotice } from "@/app/s/[slug]/HiddenShopNotice";
@@ -263,18 +264,18 @@ type SearchParams = Record<string, string | string[] | undefined>;
  * does take ChairBack bookings, or that does not own the custom domain this
  * visit came through (the same check the shop page makes).
  *
- * 🔴 ALWAYS /s/<slug> ON THIS HOST, WITH THE WHOLE QUERY. A custom domain's
- * /book never renders on that domain: middleware hands it to /from-domain,
- * which 308s to THIS page on the platform host with `cb_domain` set. So "/"
- * here is ChairBack's own home page, not the shop's - and `cb_domain` must ride
- * along so the shop page repeats the ownership check, as must the visitor's
- * utm/fbclid, the only record of where the visit came from.
+ * 🔴 THE SHOP'S PAGE ON THIS HOST, WITH THE WHOLE QUERY. On a shop's own
+ * domain that is "/", served right there; on getchairback.com it is
+ * /s/<slug> - "/" there would be ChairBack's own home page, not the shop's. A `cb_domain` from a
+ * link of the redirect days rides along so the shop page repeats the
+ * ownership check, as must the visitor's utm/fbclid, the only record of where
+ * the visit came from.
  */
 async function pageInsteadOfBooking(
   slug: string,
   searchParams?: SearchParams,
 ): Promise<string | null> {
-  const expected = expectedDomain(searchParams);
+  const expected = expectedDomainForVisit(searchParams);
   const read = (fresh: boolean) =>
     apiPublicGet<{ bookingMode: string; customDomain?: string | null }>(
       `/api/page/${encodeURIComponent(slug)}`,
@@ -296,18 +297,20 @@ async function pageInsteadOfBooking(
     }
   }
   const qs = query.toString();
-  return `/s/${encodeURIComponent(slug)}${qs ? `?${qs}` : ""}`;
+  const shopPage = visitDomain() === null ? `/s/${encodeURIComponent(slug)}` : "/";
+  return `${shopPage}${qs ? `?${qs}` : ""}`;
 }
 
 /**
  * The booking shell for THIS visit, or null when it must not render. Same
- * rule as the shop page: a visit from a custom domain books only with the shop
- * that owns that domain, never with whoever holds the slug now. (The booking
- * WRITE backstops this too - it takes service and staff ids that belong to
- * one shop - but a form for the wrong shop must never be shown at all.)
+ * rule as the shop page: a visit ON a shop's domain (or from one, by a link of
+ * the redirect days) books only with the shop that owns that domain, never
+ * with whoever holds the slug now. (The booking WRITE backstops this too - it
+ * takes service and staff ids that belong to one shop - but a form for the
+ * wrong shop must never be shown at all.)
  */
 async function getDataFor(slug: string, searchParams?: SearchParams): Promise<BookShopData | null> {
-  const expected = expectedDomain(searchParams);
+  const expected = expectedDomainForVisit(searchParams);
   const data = await getData(slug);
   if (expected === null || servesDomain(data?.shop ?? null, expected)) return data;
   const fresh = await getData(slug, true);
@@ -358,7 +361,7 @@ export default async function BookPage({
     if (page) redirect(page);
     // A shop that hid its page stops online booking too. Its clients' links
     // are right, so they hear that, not "that page doesn't exist".
-    const hidden = await loadHiddenShop(params.slug, expectedDomain(searchParams));
+    const hidden = await loadHiddenShop(params.slug, expectedDomainForVisit(searchParams));
     if (hidden) return <HiddenShopNotice shop={hidden} />;
     notFound();
   }

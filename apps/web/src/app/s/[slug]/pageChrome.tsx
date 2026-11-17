@@ -204,7 +204,9 @@ export function ShopFooter({
   rewardsHref?: string;
   /**
    * "" on getchairback.com; the platform's origin when this page is served on
-   * the shop's own domain, where "/" is the shop's page, not ChairBack's.
+   * the shop's own domain, where "/" is the shop's page, not ChairBack's. Only
+   * the powered-by line uses it: finding your rewards is served on the
+   * shop's domain too (lib/customDomainRouting.ts).
    */
   platformOrigin?: string;
 }) {
@@ -228,7 +230,7 @@ export function ShopFooter({
           this customer is anywhere else. */}
       {!rewardsHref && !inApp && (
         <a
-          href={preview ? undefined : `${platformOrigin}/my-rewards`}
+          href={preview ? undefined : "/my-rewards"}
           onClick={preview ? (e) => e.preventDefault() : undefined}
           className="text-[11px] underline-offset-2 hover:underline"
           style={{ color: theme.muted }}

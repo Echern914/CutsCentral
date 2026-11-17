@@ -77,7 +77,6 @@ const HIDDEN_PREFIXES = [
   // Client pages the list was missing: an owner's assistant has nothing to say
   // to a client holding a waitlist spot, a kiosk customer or a rewards lookup.
   "/custom-domain",
-  "/from-domain",
   "/waitlist",
   "/my-rewards",
   "/kiosk",

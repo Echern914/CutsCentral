@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { ATTRIBUTION_COOKIE, middleware } from "./middleware";
-import { PATH_HEADER } from "./lib/customDomainGuard";
 
 /**
  * The middleware on a shop's OWN domain - the path a customer takes when they
@@ -71,45 +70,92 @@ describe("a shop's own domain: the page", () => {
 });
 
 describe("a shop's own domain: booking", () => {
-  it("🔴 goes to the resolver, with the visitor's query intact and the path carried in a header", () => {
+  it("🔴 is served ON the domain - no redirect off it, the visitor's query intact", () => {
     const res = middleware(request(`https://studioone.com/book?service=svc_1&${IG}`));
+    expect(res.headers.get("location")).toBeNull();
     const r = rewriteOf(res)!;
-    expect(r.pathname).toBe("/from-domain/studioone.com");
+    expect(r.pathname).toBe("/custom-domain/studioone.com/book");
     expect(r.searchParams.get("service")).toBe("svc_1");
     expect(r.searchParams.get("fbclid")).toBe("PAZ");
-    // The path is a REQUEST HEADER override, not a query parameter: a query
-    // parameter added here never reached the route under `next start`.
-    expect([...r.searchParams.keys()].sort()).toEqual(
-      ["fbclid", "service", "utm_content", "utm_medium", "utm_source"].sort(),
-    );
-    expect(res.headers.get(`x-middleware-request-${PATH_HEADER}`)).toBe("/book");
-    expect(res.headers.get("x-middleware-override-headers")).toContain(PATH_HEADER);
   });
 
-  it("every booking spelling goes the same way", () => {
-    for (const path of ["/book/studio-one", "/BOOK/Studio-One", "/book/studio-one/group", "/book/some-other-shop"]) {
-      const res = middleware(request(`https://studioone.com${path}`));
-      expect(rewriteOf(res)!.pathname, path).toBe("/from-domain/studioone.com");
-      expect(res.headers.get(`x-middleware-request-${PATH_HEADER}`), path).toBe(path);
+  it("every booking spelling, and any slug, is this domain's booking", () => {
+    const cases: [string, string][] = [
+      ["/book/studio-one", "/custom-domain/studioone.com/book"],
+      ["/BOOK/Studio-One", "/custom-domain/studioone.com/book"],
+      ["/book/some-other-shop", "/custom-domain/studioone.com/book"],
+      ["/book/studio-one/group", "/custom-domain/studioone.com/book/group"],
+      ["/book/studio-one/assistant", "/custom-domain/studioone.com/book/assistant"],
+    ];
+    for (const [path, to] of cases) {
+      expect(rewriteOf(middleware(request(`https://studioone.com${path}`)))!.pathname, path).toBe(to);
     }
   });
 
-  it("a visitor cannot choose the carried path - the real one always wins", () => {
-    const res = middleware(request("https://studioone.com/book", { [PATH_HEADER]: "//evil.example" }));
-    expect(res.headers.get(`x-middleware-request-${PATH_HEADER}`)).toBe("/book");
+  it("🔴 the form's own fetches reach it - Confirm is a server action, a fetch like any other", () => {
+    // These used to get the 204 below, which is right for a page off the
+    // domain and fatal for one served on it.
+    const res = middleware(
+      request("https://studioone.com/book", { "sec-fetch-dest": "empty", "sec-fetch-mode": "cors" }),
+    );
+    expect(res.status).toBe(200);
+    expect(rewriteOf(res)!.pathname).toBe("/custom-domain/studioone.com/book");
+  });
+});
+
+describe("a shop's own domain: the booked screen and rewards", () => {
+  it("🔴 are served ON the domain at their own path, query intact", () => {
+    for (const path of [
+      // A redirect-based payment returns to the manage page with its params.
+      "/book/manage/tok_1?payment_intent=pi_1&redirect_status=succeeded",
+      "/book/manage/tok_1/wallet-pass",
+      "/book/group/tok_2",
+      "/r/magic",
+      "/r/magic/rewards",
+      "/my-rewards",
+    ]) {
+      const res = middleware(request(`https://studioone.com${path}`));
+      expect(res.headers.get("location"), path).toBeNull();
+      expect(rewriteOf(res), path).toBeNull();
+      expect(res.headers.get("x-middleware-next"), path).toBe("1");
+    }
+  });
+
+  it("their fetches too - the rewards card's push opt-in posts to its own route", () => {
+    const res = middleware(
+      request("https://studioone.com/r/magic/push/subscribe", { "sec-fetch-dest": "empty", "sec-fetch-mode": "cors" }),
+    );
+    expect(res.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  it("another spelling is served as the page's own, the token untouched", () => {
+    const r = rewriteOf(middleware(request("https://studioone.com/Book/Manage/Tok_AbC")))!;
+    expect(r.host).toBe("studioone.com");
+    expect(r.pathname).toBe("/book/manage/Tok_AbC");
+  });
+
+  /** The visit path the PAGE is handed (Next forwards it as a request header). */
+  const visitPathOf = (res: Response) => res.headers.get("x-middleware-request-x-cb-visit-path");
+
+  it("🔴 hands the page its own path and query - the card's layout redirects from it", () => {
+    expect(visitPathOf(middleware(request("https://studioone.com/r/magic?tip=1")))).toBe("/r/magic?tip=1");
+    expect(visitPathOf(middleware(request("https://studioone.com/r/magic/rewards")))).toBe("/r/magic/rewards");
+    // Under the spelling the page is served by, not the one typed.
+    expect(visitPathOf(middleware(request("https://studioone.com/R/magic/Rewards")))).toBe("/r/magic/rewards");
+  });
+
+  it("🔴 replaces whatever the browser sent under that name", () => {
+    const res = middleware(request("https://studioone.com/r/magic", { "x-cb-visit-path": "//evil.example/r/magic" }));
+    expect(visitPathOf(res)).toBe("/r/magic");
   });
 });
 
 describe("a shop's own domain: everything else", () => {
   it("goes to the platform at the same path - temporarily", () => {
     const cases: [string, string][] = [
-      // A redirect-based payment returns to the manage page with its params.
-      [
-        "https://studioone.com/book/manage/tok_1?payment_intent=pi_1&redirect_status=succeeded",
-        "https://getchairback.com/book/manage/tok_1?payment_intent=pi_1&redirect_status=succeeded",
-      ],
-      ["https://studioone.com/my-rewards", "https://getchairback.com/my-rewards"],
       ["https://studioone.com/privacy", "https://getchairback.com/privacy"],
+      ["https://studioone.com/terms?x=1", "https://getchairback.com/terms?x=1"],
+      ["https://studioone.com/waitlist/offer/tok", "https://getchairback.com/waitlist/offer/tok"],
     ];
     for (const [from, to] of cases) {
       const res = middleware(request(from));
@@ -127,7 +173,7 @@ describe("a shop's own domain: everything else", () => {
     // Only the headers middleware really receives: Next strips `RSC` and
     // `Next-Router-*` before middleware runs, so a test that sent those would
     // pass while production never saw them.
-    for (const path of ["/privacy", "/book"]) {
+    for (const path of ["/privacy", "/login"]) {
       const res = middleware(request(`https://studioone.com${path}`, { "sec-fetch-dest": "empty", "sec-fetch-mode": "cors" }));
       expect(res.status, path).toBe(204);
       expect(res.headers.get("location"), path).toBeNull();
@@ -143,10 +189,12 @@ describe("a shop's own domain: everything else", () => {
     expect(middleware(request("https://studioone.com/privacy")).status).toBe(307);
   });
 
-  it("🔴 never renders sign-in on a shop's domain - gated paths go to the platform", () => {
-    const res = middleware(request("https://studioone.com/dashboard"));
-    expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toBe("https://getchairback.com/dashboard");
+  it("🔴 never renders sign-in on a shop's domain - sign-in and gated paths go to the platform", () => {
+    for (const path of ["/dashboard", "/login"]) {
+      const res = middleware(request(`https://studioone.com${path}`));
+      expect(res.status, path).toBe(307);
+      expect(res.headers.get("location"), path).toBe(`https://getchairback.com${path}`);
+    }
   });
 
   it("records no attribution cookie there - only platform signup reads it", () => {
@@ -173,7 +221,7 @@ describe("the platform's own hosts, unchanged", () => {
   });
 
   it("do not expose the internal routes a shop's domain is served through", () => {
-    for (const path of ["/custom-domain/studioone.com", "/custom-domain", "/from-domain/studioone.com"]) {
+    for (const path of ["/custom-domain/studioone.com", "/custom-domain", "/custom-domain/studioone.com/book"]) {
       expect(middleware(request(`https://getchairback.com${path}`)).status, path).toBe(404);
     }
   });

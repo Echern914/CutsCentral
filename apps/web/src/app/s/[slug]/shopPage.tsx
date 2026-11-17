@@ -113,16 +113,17 @@ export function shopPageMetadata(data: ShopPageData | null): Metadata {
 
 /**
  * The page itself. `bookQuery` carries the same-shop check on to booking for
- * a visit through a custom domain; `platformOrigin` is set when the page is
- * served ON that domain, so its links to ChairBack itself - booking above all
- * - point at getchairback.com and not at the shop's domain.
+ * a visit from a link of the custom-domain redirect days. When the page is
+ * served ON the shop's domain, `bookPath` keeps booking on that domain and
+ * `platformOrigin` points the links to ChairBack itself (powered-by) at
+ * getchairback.com, since "/" there is the shop's page.
  *
  * A function returning the tree, not a component: the pages hand back exactly
  * this element tree.
  */
 export function shopPageTree(
   data: ShopPageData,
-  links: { bookQuery?: string; platformOrigin?: string } = {},
+  links: { bookQuery?: string; bookPath?: string; platformOrigin?: string } = {},
 ): React.ReactElement {
   return (
     <>
@@ -135,7 +136,12 @@ export function shopPageTree(
           __html: JSON.stringify(shopJsonLd(data)).replace(/</g, "\\u003c"),
         }}
       />
-      <ShopPageClient data={data} bookQuery={links.bookQuery} platformOrigin={links.platformOrigin} />
+      <ShopPageClient
+        data={data}
+        bookQuery={links.bookQuery}
+        bookPath={links.bookPath}
+        platformOrigin={links.platformOrigin}
+      />
       {/* Provider of the Month: opens on arrival, over every design. */}
       <AwardSpotlight award={data.award} slug={data.slug} />
       <div className="mx-auto w-full max-w-2xl px-4 pb-8">

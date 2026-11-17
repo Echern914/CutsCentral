@@ -4,6 +4,8 @@ import { notFound } from "next/navigation";
 import { APP_NAME, serviceNounForShop } from "@chairback/config/constants";
 import { bookingHandoffFrom, bookingHandoffQuery } from "@chairback/config/bookingHandoff";
 import { apiPublicGet } from "@/lib/api";
+import { PLATFORM_ORIGIN } from "@/lib/customDomainRouting";
+import { keepTokenPageOnDomain, visitDomain, withVisitorQuery } from "@/lib/customDomainVisit";
 import { ShopPageClient } from "@/app/s/[slug]/ShopPageClient";
 import type { ShopPageData } from "@/app/s/[slug]/page";
 import { RewardsClient } from "./RewardsClient";
@@ -48,11 +50,23 @@ async function getShopPage(slug: string): Promise<ShopPageData | null> {
 
 export async function generateMetadata({
   params,
+  searchParams,
 }: {
   params: { magicToken: string };
+  searchParams?: { cb_me?: string | string[] };
 }): Promise<Metadata> {
   const data = await getRewards(params.magicToken);
   if (!data) return { title: APP_NAME };
+  // 🔴 The domain check runs HERE as well as in the page. This route has a
+  // loading.tsx, so the page STREAMS: by the time the page body redirects, a
+  // 200 has gone out with this card's title in its head, on the wrong shop's
+  // domain, and the redirect can only happen inside the page. Metadata is
+  // resolved before anything is sent, so a redirect from here is a real 307.
+  // (The lookup is memoised per request, so the page's own check is free.)
+  await keepTokenPageOnDomain(
+    data.shop.pageSlug,
+    withVisitorQuery(`/r/${params.magicToken}`, searchParams as Record<string, string | string[] | undefined>),
+  );
   const shopPage = data.shop.pageSlug ? await getShopPage(data.shop.pageSlug) : null;
   const description =
     shopPage?.bio ??
@@ -81,6 +95,13 @@ export default async function ClientLandingPage({
 }) {
   const data = await getRewards(params.magicToken);
   if (!data) notFound();
+  // On a shop's own domain only that shop's client shows here; any other goes
+  // to the same page on getchairback.com (lib/customDomainVisit.ts).
+  await keepTokenPageOnDomain(
+    data.shop.pageSlug,
+    withVisitorQuery(`/r/${params.magicToken}`, searchParams as Record<string, string | string[] | undefined>),
+  );
+  const onDomain = visitDomain() !== null;
 
   // A shop with no public page (no slug yet, or the page turned off) has no
   // shop surface to land on. Rather than strand the client on an empty screen,
@@ -107,6 +128,10 @@ export default async function ClientLandingPage({
       // customer's record and shows in their app (config bookingHandoff.ts).
       // Opaque here - the booking API alone decides what it is worth.
       bookQuery={bookingHandoffQuery(bookingHandoffFrom(searchParams?.cb_me)) || undefined}
+      // On the shop's own domain, booking stays there at its shortest address
+      // and "Powered by" points at ChairBack's own site (lib/customDomainRouting.ts).
+      bookPath={onDomain ? "/book" : undefined}
+      platformOrigin={onDomain ? PLATFORM_ORIGIN : undefined}
       // Turns the shop page into the client's OWN view of the shop: it gains a
       // rewards entry pointing back into their token. Anonymous visitors on
       // /s/<slug> pass nothing here and see no such link.

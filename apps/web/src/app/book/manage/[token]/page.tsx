@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
 import type { RequestedReason } from "@chairback/config/customerStatus";
 import { apiPublicGet } from "@/lib/api";
+import { keepTokenPageOnDomain, withVisitorQuery } from "@/lib/customDomainVisit";
 import { GetTheApp } from "@/components/GetTheApp";
 import { appleItunesApp } from "@/lib/appBanner";
 import { ManageClient } from "./ManageClient";
@@ -196,6 +197,13 @@ export default async function ManagePage({
 }) {
   const data = await getData(params.token);
   if (!data) notFound();
+  // On a shop's own domain only that shop's booking shows here; any other
+  // goes to the same page on getchairback.com, query and all - a card
+  // payment's redirect comes back with its own (lib/customDomainVisit.ts).
+  await keepTokenPageOnDomain(
+    data.shop.slug,
+    withVisitorQuery(`/book/manage/${params.token}`, searchParams as Record<string, string | string[] | undefined>),
+  );
   // While a tip is open, "Open in ChairBack" would move a browser user - who
   // has Apple Pay here - into the app's WebView, which cannot show it.
   const tipOpen = data.tip?.state === "open";

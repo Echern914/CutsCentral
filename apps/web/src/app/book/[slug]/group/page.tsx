@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { APP_NAME } from "@chairback/config/constants";
 import { apiPublicGet } from "@/lib/api";
+import { servesThisVisit } from "@/lib/customDomainVisit";
 import { appleItunesApp } from "@/lib/appBanner";
 import { NativeReadySignal } from "@/components/NativeReadySignal";
 import type { BookShopData } from "../page";
@@ -33,7 +34,8 @@ async function getData(slug: string): Promise<BookShopData | null> {
 
 export default async function GroupBookPage({ params }: { params: { slug: string } }) {
   const data = await getData(params.slug);
-  if (!data) notFound();
+  // On a shop's own domain, only that shop's group booking (lib/customDomainVisit.ts).
+  if (!data || !servesThisVisit(data.shop)) notFound();
 
   // 🔴 SAID HERE, BEFORE ANY FORM IS DRAWN. A shop that takes money at booking
   // cannot take a group booking at all - the API refuses one outright, because

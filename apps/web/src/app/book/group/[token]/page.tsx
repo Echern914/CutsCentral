@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { APP_NAME } from "@chairback/config/constants";
+import { keepTokenPageOnDomain } from "@/lib/customDomainVisit";
 import { GroupManageClient } from "./GroupManageClient";
 import { groupViewAction } from "./actions";
 
@@ -28,5 +29,8 @@ export default async function GroupManagePage({
   // A bad token and a deleted group answer identically: a link that opens
   // nothing must not become a way to learn whether a party exists.
   if (!res.ok) notFound();
+  // On a shop's own domain only that shop's party shows here; any other goes
+  // to the same page on getchairback.com (lib/customDomainVisit.ts).
+  await keepTokenPageOnDomain(res.group.shop.slug, `/book/group/${params.token}`);
   return <GroupManageClient token={params.token} initial={res.group} />;
 }
