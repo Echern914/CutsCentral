@@ -79,24 +79,6 @@ export function durationText(min: number): string {
   return m ? `${h} hr ${m} min` : `${h} hr`;
 }
 
-const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-
-/** When a photo went up, as a person says it: "Today", "3 days ago", then the date. */
-export function addedLabel(addedAt: string | undefined, now: Date): string | null {
-  if (!addedAt) return null;
-  const at = new Date(addedAt);
-  if (Number.isNaN(at.getTime())) return null;
-  const days = Math.round((dayStart(now) - dayStart(at)) / 86_400_000);
-  if (days <= 0) return "Today";
-  if (days === 1) return "Yesterday";
-  if (days < 7) return `${days} days ago`;
-  if (days < 28) {
-    const weeks = Math.floor(days / 7);
-    return weeks === 1 ? "1 week ago" : `${weeks} weeks ago`;
-  }
-  return at.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
 // ---------------------------------------------------------------------------
 // Photos
 // ---------------------------------------------------------------------------
@@ -128,16 +110,6 @@ export function photoMeta(data: ShopPageData, photo: PagePhoto): string | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
-/** One service's photos: the service's own picture first, then the gallery's photos of it. */
-export function servicePhotos(service: PageService, photos: PagePhoto[]): PagePhoto[] {
-  const tagged = photos.filter((p) => p.serviceId === service.id);
-  const own =
-    service.imageUrl && !tagged.some((p) => p.url === service.imageUrl)
-      ? [{ url: service.imageUrl, serviceId: service.id }]
-      : [];
-  return [...own, ...tagged];
-}
-
 const dated = (p: PagePhoto) => Boolean(p.addedAt && !Number.isNaN(Date.parse(p.addedAt)));
 
 /**
@@ -150,27 +122,6 @@ export function newestFirst(photos: PagePhoto[]): PagePhoto[] {
 }
 
 export type Review = ShopPageData["reviews"][number];
-
-export type FeedItem =
-  | { kind: "photo"; photo: PagePhoto; index: number }
-  | { kind: "review"; review: Review };
-
-/**
- * The Fresh feed: the photos in the order given, a written review after every
- * `every` photos, and any reviews still unshown after the last photo (up to
- * `maxReviews` in all). `index` is the photo's place in `photos`, for the viewer.
- */
-export function feedWithReviews(photos: PagePhoto[], reviews: Review[], every = 2, maxReviews = 6): FeedItem[] {
-  const words = reviews.filter((r) => r.body?.trim()).slice(0, maxReviews);
-  const items: FeedItem[] = [];
-  let next = 0;
-  photos.forEach((photo, index) => {
-    items.push({ kind: "photo", photo, index });
-    if ((index + 1) % every === 0 && next < words.length) items.push({ kind: "review", review: words[next++]! });
-  });
-  while (next < words.length) items.push({ kind: "review", review: words[next++]! });
-  return items;
-}
 
 /** The sections a design shows below its own top, in the shop's order. */
 export function sectionsBelow(ctx: Pick<DesignCtx, "order" | "sections">, leaveOut: PageSectionKey[]): React.ReactNode[] {

@@ -195,7 +195,7 @@ describe("once booked", () => {
     expect(document.querySelector('[data-qa="booked-address"]')!.textContent).toBe(
       "The exact address is on your appointment page.",
     );
-    expect(screen.getByRole("link", { name: "View / change my appointment" }).getAttribute("href")).toBe(
+    expect(screen.getByRole("link", { name: "Manage booking" }).getAttribute("href")).toBe(
       "/book/manage/tok",
     );
   });

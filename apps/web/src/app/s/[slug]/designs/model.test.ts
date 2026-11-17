@@ -1,16 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PagePhoto, ShopPageData } from "../page";
-import {
-  addedLabel,
-  bookPickedHref,
-  durationText,
-  feedWithReviews,
-  monogram,
-  newestFirst,
-  photoMeta,
-  priceText,
-  servicePhotos,
-} from "./model";
+import { bookPickedHref, durationText, monogram, newestFirst, photoMeta, priceText } from "./model";
 import { photosToShow } from "./examples";
 
 const data = { slug: "fresh" } as ShopPageData;
@@ -61,19 +51,6 @@ describe("the words", () => {
     expect(durationText(75)).toBe("1 hr 15 min");
   });
 
-  it("when a photo went up, as a person says it", () => {
-    const now = new Date(2026, 8, 30, 15, 0);
-    const at = (y: number, m: number, d: number, h = 10) => new Date(y, m, d, h).toISOString();
-    expect(addedLabel(at(2026, 8, 30, 9), now)).toBe("Today");
-    expect(addedLabel(at(2026, 8, 29, 23), now)).toBe("Yesterday");
-    expect(addedLabel(at(2026, 8, 27), now)).toBe("3 days ago");
-    expect(addedLabel(at(2026, 8, 20), now)).toBe("1 week ago");
-    expect(addedLabel(at(2026, 8, 9), now)).toBe("3 weeks ago");
-    expect(addedLabel(at(2026, 7, 1), now)).not.toMatch(/ago/);
-    expect(addedLabel(undefined, now)).toBeNull();
-    expect(addedLabel("not a date", now)).toBeNull();
-  });
-
   it("a coin with no logo shows the shop's initials", () => {
     expect(monogram("Fade District")).toBe("FD");
     expect(monogram("  drickcuttinup ")).toBe("DR");
@@ -96,33 +73,6 @@ describe("ordering the work", () => {
   it("🔴 newest first; photos from before dates existed follow, in the owner's order", () => {
     const photos = [p("old-a"), p("mid", "2026-09-20T10:00:00Z"), p("old-b"), p("new", "2026-09-29T10:00:00Z")];
     expect(newestFirst(photos).map((x) => x.url)).toEqual(["new", "mid", "old-a", "old-b"]);
-  });
-
-  it("a written review after every second photo, the rest after the last one", () => {
-    const review = (id: string, body: string | null) => ({ id, rating: 5, body, authorName: null, createdAt: "2026-09-01T00:00:00Z" });
-    const feed = feedWithReviews(
-      [p("1"), p("2"), p("3")],
-      [review("a", "Great"), review("stars-only", null), review("b", "Clean"), review("c", "Fast")],
-    );
-    expect(feed.map((i) => (i.kind === "photo" ? i.photo.url : `r:${i.review.id}`))).toEqual([
-      "1",
-      "2",
-      "r:a",
-      "3",
-      "r:b",
-      "r:c",
-    ]);
-  });
-
-  it("a service's photos: its own picture first, then the gallery's photos of it", () => {
-    const service = { id: "s", name: "Haircut", description: null, imageUrl: "own.jpg", durationMin: 30, price: 35 };
-    const photos = [{ url: "a.jpg", serviceId: "s" }, { url: "b.jpg", serviceId: "t" }, { url: "own.jpg", serviceId: "s" }];
-    expect(servicePhotos(service, photos).map((x) => x.url)).toEqual(["a.jpg", "own.jpg"]);
-    expect(servicePhotos({ ...service, imageUrl: "own2.jpg" }, photos).map((x) => x.url)).toEqual([
-      "own2.jpg",
-      "a.jpg",
-      "own.jpg",
-    ]);
   });
 });
 

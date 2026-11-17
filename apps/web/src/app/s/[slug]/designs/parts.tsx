@@ -5,8 +5,8 @@ import { motion } from "framer-motion";
 import { fadeUp, staggerContainer } from "@/components/motion/variants";
 import { ShopWaitlistForm } from "../ShopWaitlistForm";
 import { ShopChrome } from "../pageChrome";
-import { StampMark, Stars } from "../pageSections";
-import type { PagePhoto, PageStaff } from "../page";
+import { Stars } from "../pageSections";
+import type { PagePhoto } from "../page";
 import { monogram, photoTitle, type DesignCtx } from "./model";
 import { PhotoViewer } from "./PhotoViewer";
 
@@ -85,28 +85,6 @@ export function RatingLine({ ctx, className, center }: { ctx: DesignCtx; classNa
 }
 
 /**
- * A known client's way to their punch card, kept small: these designs lead with
- * the work. Left out inside an app build whose Rewards tab holds the client's
- * whole rewards, timer included (the owner: "move that to customer side"). On
- * the web, and in an older build, it stays - there it is the way to the card.
- */
-export function RewardsPill({ ctx }: { ctx: DesignCtx }) {
-  if (!ctx.rewardsHref || ctx.appRewardsTab) return null;
-  return (
-    <motion.div variants={fadeUp} className="mt-3 flex justify-center">
-      <a
-        href={ctx.rewardsHref}
-        className="inline-flex min-h-11 items-center gap-2 px-4 text-xs font-medium"
-        style={{ border: `1px solid ${ctx.theme.border}`, color: ctx.theme.text, borderRadius: ctx.layout.buttonRadius }}
-      >
-        <StampMark />
-        {ctx.rewardsLabel}
-      </a>
-    </motion.div>
-  );
-}
-
-/**
  * The standing waitlist, moved off the top. A shop that books here needs none
  * on this page - its booking page offers the waitlist when a day is full - so
  * only a shop that books elsewhere keeps it, lower down.
@@ -175,53 +153,6 @@ export function photoLabel(ctx: DesignCtx, photo: PagePhoto, i: number): string 
   return photoTitle(ctx.data, photo) ?? `${ctx.data.name} photo ${i + 1}`;
 }
 
-/** A filter chip: a real toggle button, pressed when active. */
-export function Chip({
-  ctx,
-  active,
-  onClick,
-  person,
-  children,
-}: {
-  ctx: DesignCtx;
-  active: boolean;
-  onClick: () => void;
-  person?: PageStaff;
-  children: React.ReactNode;
-}) {
-  const { theme } = ctx;
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className="inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap px-4 text-xs font-medium"
-      style={{
-        borderRadius: "9999px",
-        border: `1px solid ${active ? theme.text : theme.border}`,
-        backgroundColor: active ? theme.text : "transparent",
-        color: active ? theme.bg : theme.text,
-        paddingLeft: person ? 6 : undefined,
-      }}
-    >
-      {person &&
-        (person.imageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={person.imageUrl} alt="" className="h-7 w-7 rounded-full object-cover" />
-        ) : (
-          <span
-            aria-hidden
-            className="grid h-7 w-7 place-items-center rounded-full text-[11px] font-bold"
-            style={{ backgroundColor: theme.surface, color: theme.text, border: `1px solid ${theme.border}` }}
-          >
-            {person.name.trim().charAt(0).toUpperCase()}
-          </span>
-        ))}
-      {children}
-    </button>
-  );
-}
-
 /** The small label over example photos in the editor preview. */
 export function ExamplesNote({ ctx }: { ctx: DesignCtx }) {
   return (
@@ -252,34 +183,7 @@ export function useViewer(ctx: DesignCtx, examples: boolean) {
   return { show: (photos: PagePhoto[], index: number) => setOpen({ photos, index }), node, isOpen: open !== null };
 }
 
-/**
- * The compact top the content-first designs use: coin, name and rating on one
- * row, the bio under it. Padded down so the corner back button (fixed, top
- * left) never sits on the coin.
- */
-export function RowHeader({ ctx }: { ctx: DesignCtx }) {
-  const { data, theme } = ctx;
-  return (
-    <motion.header variants={fadeUp} className="pt-16" data-tour="hero">
-      <div className="flex items-center gap-3.5">
-        <Coin ctx={ctx} size={56} />
-        <div className="min-w-0">
-          <h1 className="text-[28px] leading-none tracking-tight" style={{ fontFamily: "var(--page-display)" }}>
-            {data.name}
-          </h1>
-          <RatingLine ctx={ctx} className="mt-1.5" />
-        </div>
-      </div>
-      {data.bio && (
-        <p className="mt-3 text-sm" style={{ color: theme.muted }}>
-          {data.bio}
-        </p>
-      )}
-    </motion.header>
-  );
-}
-
-/** Book button styling shared by the designs' own Book links. */
+/** Book button styling for Studio's own Book links. */
 export function bookButtonStyle(ctx: DesignCtx): CSSProperties {
   return {
     backgroundColor: ctx.accent,

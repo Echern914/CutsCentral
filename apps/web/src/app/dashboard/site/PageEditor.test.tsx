@@ -118,29 +118,16 @@ describe("keeping the street address private", () => {
 });
 
 /**
- * "Have them as templates... keep the one that everyone has been using now as
- * the default." The picker starts on Classic for a shop that never chose, a
- * pick previews at once and saves as its one field, and a photo can say what
- * it shows and who did it.
+ * Every shop's page is Studio (ShopPageClient), so there is no design to pick;
+ * a shop that had picked one opens with nothing to save. A photo can still say
+ * what it shows and who did it.
  */
-describe("the page design", () => {
-  const designs = () => within(screen.getByRole("group", { name: "Page design" }));
-
-  it("🔴 a shop that never picked one is on Classic, with nothing to save", () => {
-    render(<PageEditor settings={settings()} appBase="https://app.test" />);
-    expect(designs().getByRole("button", { name: /^Classic/ })).toHaveAttribute("aria-pressed", "true");
-    expect(preview.last?.pageDesign).toBe("classic");
+describe("the page layout", () => {
+  it("🔴 there is no design picker, and a shop that had picked one has nothing to save", () => {
+    render(<PageEditor settings={settings({ pageDesign: "grid" })} appBase="https://app.test" />);
+    expect(screen.queryByRole("group", { name: "Page design" })).toBeNull();
+    expect(screen.queryByText("Page design")).toBeNull();
     expect(screen.getByRole("button", { name: "Save page" })).toBeDisabled();
-  });
-
-  it("picking one previews it at once and saves that field alone", async () => {
-    render(<PageEditor settings={settings({ pageDesign: "classic" })} appBase="https://app.test" />);
-    fireEvent.click(designs().getByRole("button", { name: /^Photos first/ }));
-    expect(designs().getByRole("button", { name: /^Photos first/ })).toHaveAttribute("aria-pressed", "true");
-    expect(preview.last?.pageDesign).toBe("grid");
-    fireEvent.click(screen.getByRole("button", { name: "Save page" }));
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-    expect(save.mock.calls[0]![0]).toEqual({ pageDesign: "grid" });
   });
 
   it("🔴 a photo's tags save with it; the preview keeps only tags a client could book", async () => {
