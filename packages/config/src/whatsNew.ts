@@ -36,6 +36,15 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-18-wallet-pass-true-time",
+    date: "2026-11-18",
+    kind: "fix",
+    title: "Apple Wallet shows the real appointment time",
+    body:
+      "On the lock screen, a client's Apple Wallet pass showed the time starting an hour early, like 2:00-3:30 PM " +
+      "for a 3:00 cut. It now shows the real start and end. Passes already in clients' Wallets update by themselves.",
+  },
+  {
     id: "2026-11-17-one-calendar-for-a-tapped-service",
     date: "2026-11-17",
     kind: "fix",

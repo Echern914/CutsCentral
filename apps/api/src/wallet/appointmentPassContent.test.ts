@@ -24,7 +24,10 @@ const {
   buildAppointmentPassJson,
   confirmationReference,
   finishedPassLabel,
-  PASS_RELEVANT_BEFORE_MS,
+  appointmentPassChangedAt,
+  APPOINTMENT_PASS_FORMAT_CHANGED_AT,
+  PASS_FORMAT_REFRESH_DAYS,
+  refreshUpcomingAppointmentPassesAtBoot,
 } = await import("./appointmentPass.js");
 type Source = Parameters<typeof buildAppointmentPassJson>[0];
 
@@ -309,10 +312,31 @@ describe("relevance and expiry", () => {
     // The owner's ask: the pass must stay on the lock screen through the cut.
     // relevantDate alone fades once the start passes; the interval runs to the end.
     const pass = buildAppointmentPassJson(source());
-    expect(PASS_RELEVANT_BEFORE_MS).toBe(60 * 60 * 1000);
     expect(pass.relevantDates).toEqual([
-      { startDate: "2026-03-14T17:00:00.000Z", endDate: ENDS_AT.toISOString() },
+      { startDate: STARTS_AT.toISOString(), endDate: ENDS_AT.toISOString() },
     ]);
+  });
+
+  it("🔴 the window starts AT the appointment: iOS prints it as the time on the lock screen", () => {
+    // A 2:00-2:30 cut whose window opened an hour early read "1:00-2:30 PM"
+    // on the lock screen (Eric, 2026-11-18). The window IS the time shown.
+    const windows = buildAppointmentPassJson(source()).relevantDates as Array<{ startDate: string; endDate: string }>;
+    expect(windows[0]!.startDate).toBe(STARTS_AT.toISOString());
+    expect(windows[0]!.endDate).toBe(ENDS_AT.toISOString());
+  });
+
+  it("a pass made before the format change reports the change time, so phones re-fetch it", () => {
+    const before = new Date(APPOINTMENT_PASS_FORMAT_CHANGED_AT.getTime() - 86_400_000);
+    const after = new Date(APPOINTMENT_PASS_FORMAT_CHANGED_AT.getTime() + 60_000);
+    expect(appointmentPassChangedAt(before)).toEqual(APPOINTMENT_PASS_FORMAT_CHANGED_AT);
+    expect(appointmentPassChangedAt(after)).toEqual(after);
+  });
+
+  it("the boot refresh stops by itself once the format change is weeks old", async () => {
+    const over = new Date(
+      APPOINTMENT_PASS_FORMAT_CHANGED_AT.getTime() + (PASS_FORMAT_REFRESH_DAYS + 1) * 86_400_000,
+    );
+    expect(await refreshUpcomingAppointmentPassesAtBoot(over)).toBeNull();
   });
 
   it("a reschedule moves the whole relevance window", () => {
@@ -323,7 +347,7 @@ describe("relevance and expiry", () => {
       }),
     );
     expect(later.relevantDates).toEqual([
-      { startDate: "2026-03-15T14:00:00.000Z", endDate: "2026-03-15T16:15:00.000Z" },
+      { startDate: "2026-03-15T15:00:00.000Z", endDate: "2026-03-15T16:15:00.000Z" },
     ]);
   });
 

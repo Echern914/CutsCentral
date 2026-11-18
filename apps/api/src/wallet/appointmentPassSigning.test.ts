@@ -172,7 +172,7 @@ describe("a configured shop gets a real signed pass", () => {
     const buf = await buildPassForAppointment(appointmentId);
     const json = JSON.parse(zipEntry(buf!, "pass.json")!.toString("utf8"));
     expect(json.relevantDates).toEqual([
-      { startDate: "2026-03-14T17:00:00.000Z", endDate: "2026-03-14T18:30:00.000Z" },
+      { startDate: "2026-03-14T18:00:00.000Z", endDate: "2026-03-14T18:30:00.000Z" },
     ]);
     expect(json.relevantDate).toBe("2026-03-14T18:00:00.000Z");
   });
