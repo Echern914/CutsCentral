@@ -11,6 +11,7 @@ import { billingEnabled, connectEnabled } from "./billing/stripe.js";
 import { emailEnabled } from "./messaging/email.js";
 import { pushEnabled } from "./messaging/push.js";
 import { walletEnabled } from "./wallet/pass.js";
+import { refreshUpcomingAppointmentPassesAtBoot } from "./wallet/appointmentPass.js";
 import { squareEnabled } from "./square/client.js";
 import { receptionistConfigured } from "./receptionist/config.js";
 import { captureError, flushSentry, initSentry } from "./sentry.js";
@@ -40,6 +41,12 @@ const server = app.listen(PORT, "0.0.0.0", () => {
 });
 
 startScheduler();
+
+// Passes already on phones carry the old format until Wallet re-fetches them;
+// this wakes the upcoming ones once. Self-expiring - see the function.
+void refreshUpcomingAppointmentPassesAtBoot().catch((err: unknown) =>
+  logger.warn({ err: err instanceof Error ? err.message : String(err) }, "appointment pass format refresh failed"),
+);
 
 // Name any dark integration in the deploy log. See ops/bootReport.ts: the
 // admin preflight was correct for months while four integrations were off,

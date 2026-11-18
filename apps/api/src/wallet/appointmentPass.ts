@@ -145,24 +145,79 @@ export function appointmentPassExpiration(
   return finishedAt ?? new Date(appt.endsAt.getTime() + BOOKED_PASS_GRACE_MS);
 }
 
-/** How long before the start a live pass becomes relevant (travel time). */
-export const PASS_RELEVANT_BEFORE_MS = 60 * 60 * 1000;
-
 /**
  * The pass's relevance window for iOS 18+ `relevantDates`. PURE.
  *
- * From PASS_RELEVANT_BEFORE_MS before the start until the END of the
- * appointment, so the pass stays on the lock screen for the whole visit rather
- * than fading once the start time passes. A reschedule moves both ends, and the
- * poke that follows it carries the new window to the phone.
+ * Exactly the appointment: its start to its END, so the pass stays on the lock
+ * screen for the whole visit rather than fading once the start passes.
+ *
+ * 🔴 iOS PRINTS THIS WINDOW AS THE APPOINTMENT TIME on the lock screen
+ * ("Nov 18, 2:00-3:30 PM"). It used to open an hour early for travel time, so
+ * a 3:00-3:30 cut read as 2:00-3:30 (Eric, 2026-11-18). Never widen it: the
+ * window IS the time a customer reads.
+ *
+ * A reschedule moves both ends, and the poke that follows it carries the new
+ * window to the phone.
  */
 export function appointmentPassRelevance(
   appt: Pick<AppointmentPassSource, "startsAt" | "endsAt">,
 ): { startDate: string; endDate: string } {
   return {
-    startDate: new Date(appt.startsAt.getTime() - PASS_RELEVANT_BEFORE_MS).toISOString(),
+    startDate: appt.startsAt.toISOString(),
     endDate: appt.endsAt.toISOString(),
   };
+}
+
+/**
+ * When the pass FACE last changed for every appointment at once: the deploy
+ * that stopped the relevance window opening an hour early. Wallet only fetches
+ * a pass the web service reports as changed since its last sync, and a pass's
+ * change time is normally its appointment's updatedAt - which a format change
+ * does not touch. Reporting max(updatedAt, this) makes every pass already on a
+ * phone fetch the corrected one on its next sync. Move it forward whenever the
+ * pass format changes for everyone.
+ */
+export const APPOINTMENT_PASS_FORMAT_CHANGED_AT = new Date("2026-11-18T19:30:00.000Z");
+
+/** A pass's change time for the Wallet web service. PURE. */
+export function appointmentPassChangedAt(updatedAt: Date): Date {
+  return updatedAt > APPOINTMENT_PASS_FORMAT_CHANGED_AT ? updatedAt : APPOINTMENT_PASS_FORMAT_CHANGED_AT;
+}
+
+/** How long after a format change the boot refresh keeps running. */
+export const PASS_FORMAT_REFRESH_DAYS = 21;
+
+/**
+ * Wake every UPCOMING appointment pass on a phone so Wallet fetches the
+ * corrected one (see APPOINTMENT_PASS_FORMAT_CHANGED_AT). Run once at boot,
+ * fire-and-forget; it stops by itself PASS_FORMAT_REFRESH_DAYS after the
+ * change, when every booking made before it is long past. A repeat on a later
+ * deploy is harmless: a poke is a silent "check for updates", and Wallet's
+ * sync answers nothing new.
+ *
+ * Returns how many appointments were poked (null = window over).
+ */
+export async function refreshUpcomingAppointmentPassesAtBoot(now: Date = new Date()): Promise<number | null> {
+  const until = APPOINTMENT_PASS_FORMAT_CHANGED_AT.getTime() + PASS_FORMAT_REFRESH_DAYS * 24 * 60 * 60 * 1000;
+  if (now.getTime() > until) return null;
+  if (!appointmentWalletEnabled()) return 0;
+  const regs = await runAsOwner((tx) =>
+    tx.walletAppointmentPassRegistration.findMany({
+      where: {
+        // Every upcoming one, not only those untouched since the change: a
+        // row edited between that instant and this deploy still carries the
+        // old window on the phone. An extra poke costs nothing.
+        appointment: { startsAt: { gt: now } },
+      },
+      select: { appointmentId: true },
+      distinct: ["appointmentId"],
+    }),
+  );
+  for (const r of regs) await pokeAppointmentPass(r.appointmentId);
+  if (regs.length > 0) {
+    logger.info({ count: regs.length }, "appointment passes poked for the format refresh");
+  }
+  return regs.length;
 }
 
 /**

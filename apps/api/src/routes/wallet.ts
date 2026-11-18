@@ -8,6 +8,7 @@ import {
   walletEnabled,
 } from "../wallet/pass.js";
 import {
+  appointmentPassChangedAt,
   appointmentWalletEnabled,
   buildPassForAppointment,
   verifyApptPassAuth,
@@ -180,7 +181,9 @@ const appointmentAdapter: PassKindAdapter = {
       });
       return regs
         .filter((r) => r.appointment)
-        .map((r) => ({ serial: r.appointment.id, changedAt: r.appointment.updatedAt }));
+        // max(updatedAt, the last format change): a pass format change
+        // touches no row, yet every pass on a phone must re-fetch.
+        .map((r) => ({ serial: r.appointment.id, changedAt: appointmentPassChangedAt(r.appointment.updatedAt) }));
     }),
   buildPass: buildPassForAppointment,
 };
