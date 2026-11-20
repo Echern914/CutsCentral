@@ -58,6 +58,7 @@ import {
 } from "./actions";
 import { PaymentStep } from "./PaymentStep";
 import { WaitlistForm } from "./WaitlistForm";
+import { narrowDayToStaff, offersChoice, pickablePeople, worksOn } from "./barberFilter";
 import { EmailMarketingChoice, emailMarketingYes } from "./EmailMarketingChoice";
 import {
   BookingPolicyAgreed,
@@ -713,6 +714,49 @@ export function BookingClient({
     return data.services.filter((s) => offered.has(s.id));
   }, [data.services, data.offerings]);
 
+  // WHO THE CUSTOMER WANTS. A shop with two or more people shows a row of them
+  // above the calendar, starting on "Any available": tap one and the page shows
+  // only that person's days and times, and the booking is written against them.
+  // Left on "Any available", the time goes to whoever has the fewest bookings
+  // that day (the API orders each time's people - config/fairChair.ts).
+  //
+  // 🔴 A one-person shop gets no row and no filter: `peopleToChoose` is empty
+  // there, so everything below reads exactly as it did before.
+  const peopleToChoose = useMemo(() => {
+    const people = pickablePeople(
+      data.staff,
+      data.offerings,
+      new Set(bookableServices.map((s) => s.id)),
+    );
+    return offersChoice(people) ? people : [];
+  }, [data.staff, data.offerings, bookableServices]);
+  // "Book with <name>" on the shop's page arrives as ?staff=<id> with no
+  // service. It used to be thrown away (the prefill needed a service), so the
+  // customer who asked for one person landed on everyone's times. It now opens
+  // the page already narrowed to them. Validated like every prefill: someone
+  // who has left, or an id from another shop, is simply "Any available".
+  const [barberFilter, setBarberFilter] = useState<string | null>(() => {
+    if (!prefill?.staffId) return null;
+    // A link that also names a bookable service is a rebook: that path loads
+    // the one service's calendar for that person (the prefill effect below).
+    if (prefill.serviceId && bookableServices.some((s) => s.id === prefill.serviceId)) return null;
+    return peopleToChoose.some((p) => p.id === prefill.staffId) ? prefill.staffId : null;
+  });
+  // The async day loader reads the live choice, not a stale render's.
+  const barberFilterRef = useRef(barberFilter);
+  const chosenPerson = peopleToChoose.find((p) => p.id === barberFilter) ?? null;
+  /** "Does this person do this service?", for narrowing a day to them. */
+  function offersFor(personId: string) {
+    const theirs = new Set(
+      data.offerings.filter((o) => o.staffId === personId).map((o) => o.serviceId),
+    );
+    return (id: string) => theirs.has(id);
+  }
+  /** One day as the customer should see it: everyone's, or the chosen person's. */
+  function dayAsChosen(day: DayBundlesResult, personId: string | null): DayBundlesResult {
+    return personId ? narrowDayToStaff(day, personId, offersFor(personId)) : day;
+  }
+
   // Grouped sections for the service-first menu (Drick: the list should mirror
   // his group taxonomy instead of interleaving everything). Groups in display
   // order with members in their saved in-group order; services without a live
@@ -795,10 +839,15 @@ export function BookingClient({
       const d = new Date(start);
       d.setUTCDate(start.getUTCDate() + i);
       if (!data.openWeekdays?.includes(d.getUTCDay())) continue;
-      out.add(d.toISOString().slice(0, 10));
+      const key = d.toISOString().slice(0, 10);
+      // One person chosen: only the days THEY keep hours. Everything the
+      // calendar does downstream (which days are offered, where the page
+      // lands, "Next available") follows from this and openDaySet below.
+      if (!worksOn(chosenPerson, key)) continue;
+      out.add(key);
     }
     return out;
-  }, [dayFirst, tz, data.shop.bookingMaxDays, data.openWeekdays]);
+  }, [dayFirst, tz, data.shop.bookingMaxDays, data.openWeekdays, chosenPerson]);
 
   // REAL availability (engine-computed, 60s-cached server side): which days
   // actually have an opening, and the single soonest bookable slot. The
@@ -851,10 +900,15 @@ export function BookingClient({
       alive = false;
     };
   }, [dayFirst, data.shop.slug]);
+  // With one person chosen, a day the SHOP is open but they are off is not an
+  // open day for this customer. (A day they work but are fully booked still
+  // counts here - the scan is shop-wide - and says so honestly when tapped.)
   const openDaySet = useMemo(
     () =>
-      openInfo && openInfo !== "unavailable" ? new Set(openInfo.openDays) : null,
-    [openInfo],
+      openInfo && openInfo !== "unavailable"
+        ? new Set(openInfo.openDays.filter((d) => worksOn(chosenPerson, d)))
+        : null,
+    [openInfo, chosenPerson],
   );
 
   // What the calendar actually offers: inside the scanned range the engine's
@@ -919,11 +973,17 @@ export function BookingClient({
   // duds lets the auto-hop below skip them and keeps the "Next available"
   // button from pointing at one. A ref so the async hop reads the live set;
   // the version counter is only there to re-render the button.
+  //
+  // Kept PER CHOICE of person: a day one person has nothing on is not an empty
+  // day for the shop, and must not be skipped once the customer goes back to
+  // "Any available".
   const emptyDaysRef = useRef<Set<string>>(new Set());
   const [, bumpEmptyDays] = useState(0);
+  const emptyKey = (day: string) => `${barberFilterRef.current ?? ""}|${day}`;
+  const knownEmpty = (day: string) => emptyDaysRef.current.has(emptyKey(day));
   function markDayEmpty(day: string) {
-    if (emptyDaysRef.current.has(day)) return;
-    emptyDaysRef.current.add(day);
+    if (knownEmpty(day)) return;
+    emptyDaysRef.current.add(emptyKey(day));
     bumpEmptyDays((v) => v + 1);
   }
 
@@ -934,9 +994,7 @@ export function BookingClient({
   /** Next day after `day` that we have no evidence against. */
   function nextCandidateDay(day: string): string | null {
     return (
-      candidateDaysRef.current.find(
-        (d) => d > day && !emptyDaysRef.current.has(d),
-      ) ?? null
+      candidateDaysRef.current.find((d) => d > day && !knownEmpty(d)) ?? null
     );
   }
   // How many empty days the page may skip on its own before it stops and shows
@@ -1048,8 +1106,10 @@ export function BookingClient({
       // that date.
       if (res.ok && res.data) {
         // Counted in times, not cards: a closed group is on the page but makes
-        // nothing bookable, so it must not stop the hop.
-        const empty = !dayHasTimes(res.data);
+        // nothing bookable, so it must not stop the hop. And counted for the
+        // person the customer chose, if they chose one: a day full of someone
+        // else's times is still a dead landing for them.
+        const empty = !dayHasTimes(dayAsChosen(res.data, barberFilterRef.current));
         if (empty && autoPickedDay.current === day) {
           markDayEmpty(day);
           const next =
@@ -1122,10 +1182,19 @@ export function BookingClient({
   // those with an opening that day, as before. Each service carries its own
   // bookable time chips, which is where the customer picks a time — there is no
   // separate time rail to reconcile with.
+  //
+  // `shownDay` is the loaded day as THIS customer sees it: everyone's times, or
+  // only the chosen person's. Narrowed here from the one payload already on the
+  // page, so switching person is instant and costs no request.
+  const shownDay = useMemo(
+    () => (dayData ? dayAsChosen(dayData, chosenPerson?.id ?? null) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dayData, chosenPerson, data.offerings],
+  );
   const visibleDay = useMemo(() => {
-    if (!dayData) return null;
-    return { groups: dayMenuGroups(dayData), ungrouped: dayData.ungrouped };
-  }, [dayData]);
+    if (!shownDay) return null;
+    return { groups: dayMenuGroups(shownDay), ungrouped: shownDay.ungrouped };
+  }, [shownDay]);
   // Which services have their photo + description folded open ("More
   // details"). Rows are compact by default - name, price, length, times - so
   // a long menu doesn't scroll for ever.
@@ -1148,8 +1217,8 @@ export function BookingClient({
   // card the customer opened). Only OPEN groups (`bundles`) are considered: a
   // closed group has no times to reveal, so opening it by itself helps nobody.
   useEffect(() => {
-    if (!dayData) return;
-    const open = groupsToAutoExpand(dayData.bundles, dayData.ungrouped);
+    if (!shownDay) return;
+    const open = groupsToAutoExpand(shownDay.bundles, shownDay.ungrouped);
     if (open.length === 0) return;
     setExpandedGroups((cur) => {
       if (open.every((id) => cur.has(id))) return cur; // no-op: don't re-render
@@ -1157,13 +1226,30 @@ export function BookingClient({
       for (const id of open) next.add(id);
       return next;
     });
-  }, [dayData]);
+  }, [shownDay]);
   /**
    * The selected day loaded and has nothing bookable on it. Counted in TIMES:
    * closed group cards still show on such a day, and must not hide the
    * booked-out screen (next available day, waitlist).
    */
-  const dayEmpty = dayData !== null && !dayHasTimes(dayData);
+  const dayEmpty = shownDay !== null && !dayHasTimes(shownDay);
+
+  /**
+   * The customer picks who they want (null = "Any available").
+   *
+   * Starts the day-first flow over, like picking another day: a time chosen
+   * under the old choice may belong to someone else, and a booking must never
+   * be written against a person the customer did not see named.
+   */
+  function choosePerson(id: string | null) {
+    if (id === barberFilter) return;
+    barberFilterRef.current = id;
+    setBarberFilter(id);
+    pendingSoonest.current = null;
+    setServiceId(null);
+    setAddOnIds([]);
+    clearSlotPick();
+  }
 
   /**
    * One service's row in the day view: name, that-day price and length, and
@@ -1326,6 +1412,13 @@ export function BookingClient({
               month: "2-digit",
               day: "2-digit",
             }).format(new Date());
+            // One person chosen: say it is THEIR day that is empty, so the
+            // customer does not read it as the whole shop being shut.
+            if (chosenPerson) {
+              return dayDate === shopToday
+                ? `${chosenPerson.name} has no times left today.`
+                : `${chosenPerson.name} has no times this day.`;
+            }
             if (dayDate === shopToday)
               return "No available times left today.";
             return bookedOutDays.has(dayDate ?? "")
@@ -1342,9 +1435,7 @@ export function BookingClient({
           const pool = openDaySet
             ? [...openDaySet].sort()
             : [...calendarDays].sort();
-          const nextOpen = pool.find(
-            (d) => d > (dayDate ?? "") && !emptyDaysRef.current.has(d),
-          );
+          const nextOpen = pool.find((d) => d > (dayDate ?? "") && !knownEmpty(d));
           if (!nextOpen) return null;
           return (
             <button
@@ -1361,16 +1452,37 @@ export function BookingClient({
               className="w-full rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-colors"
               style={{ borderColor: accent, color: accentInk }}
             >
-              Next available: {dateFmt.format(new Date(`${nextOpen}T12:00:00Z`))} →
+              {chosenPerson
+                ? `Next day with ${chosenPerson.name}: `
+                : "Next available: "}
+              {dateFmt.format(new Date(`${nextOpen}T12:00:00Z`))} →
             </button>
           );
         })()}
+        {/* Someone else may well be free: the way back to everyone's times is
+            one tap, right where the dead end is. */}
+        {chosenPerson && (
+          <button
+            type="button"
+            onClick={() => choosePerson(null)}
+            className="w-full rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-colors"
+            style={{ borderColor: `rgb(var(--cb-fg) / 0.15)` }}
+          >
+            See any available {vocab.providerNoun} →
+          </button>
+        )}
         {data.shop.waitlistEnabled &&
           (waitlistMode === "slot" ? (
             <WaitlistForm
               slug={data.shop.slug}
               shopName={data.shop.name}
               accent={accent}
+              // Waiting for one person means waiting for THEM: the form sends
+              // their id, so an opening with someone else does not text them.
+              staffId={chosenPerson?.id}
+              serviceLabel={
+                chosenPerson ? `your ${vocab.serviceNoun} with ${chosenPerson.name}` : undefined
+              }
               onDone={() => setWaitlistMode(null)}
             />
           ) : (
@@ -1656,8 +1768,17 @@ export function BookingClient({
     });
     // Only the per-service calendar needs rebuilding; the day view's chips are
     // already per-service and complete.
+    //
+    // Reloaded for the SAME person, not for everyone who does the new service.
+    // This calendar belongs to one person (a rebook link, a single-person
+    // service); widening it here would let the next time the customer taps be
+    // booked with somebody else, without the page ever saying so.
     if (staffId && slotsByDay.size > 0) {
-      loadSlots(u.serviceId, staffPoolFor(u.serviceId), slot);
+      loadSlots(
+        u.serviceId,
+        pickedStaffId ? [pickedStaffId] : staffPoolFor(u.serviceId),
+        slot,
+      );
     }
   }
 
@@ -3078,6 +3199,11 @@ export function BookingClient({
               slug={data.shop.slug}
               shopName={data.shop.name}
               accent={accent}
+              // A person chosen in the row below carries into the waitlist.
+              staffId={chosenPerson?.id}
+              serviceLabel={
+                chosenPerson ? `your ${vocab.serviceNoun} with ${chosenPerson.name}` : undefined
+              }
               onDone={() => setWaitlistMode(null)}
             />
           ) : (
@@ -3106,9 +3232,72 @@ export function BookingClient({
             />
           }
         >
+          {/* WHO WITH. Only a shop with two or more people shows this; a
+              one-person shop has nobody to choose between. Starts on "Any
+              available" (the time goes to whoever is least booked that day);
+              tapping a person narrows the calendar and the times to them.
+              A sideways-scrolling strip so a big team never pushes the
+              calendar down the page. */}
+          {peopleToChoose.length > 0 && (
+            <div className="mb-4 min-w-0" data-testid="person-row">
+              <p className="mb-2 text-xs font-semibold text-muted" id="person-row-label">
+                Choose your {vocab.providerNoun}
+              </p>
+              <div
+                role="group"
+                aria-labelledby="person-row-label"
+                className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
+              >
+                <button
+                  type="button"
+                  onClick={() => choosePerson(null)}
+                  aria-pressed={chosenPerson === null}
+                  className="flex h-11 shrink-0 items-center rounded-full border px-4 text-sm font-medium transition-colors"
+                  style={{
+                    borderColor: chosenPerson === null ? accent : `rgb(var(--cb-fg) / 0.15)`,
+                    backgroundColor: chosenPerson === null ? `${accent}14` : "transparent",
+                  }}
+                >
+                  Any available
+                </button>
+                {peopleToChoose.map((p) => {
+                  const on = chosenPerson?.id === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => choosePerson(p.id)}
+                      aria-pressed={on}
+                      className="flex h-11 shrink-0 items-center gap-2 rounded-full border py-1 pl-1.5 pr-4 text-sm font-medium transition-colors"
+                      style={{
+                        borderColor: on ? accent : `rgb(var(--cb-fg) / 0.15)`,
+                        backgroundColor: on ? `${accent}14` : "transparent",
+                      }}
+                    >
+                      {p.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={p.imageUrl} alt="" className="h-8 w-8 rounded-full object-cover" />
+                      ) : (
+                        <span
+                          aria-hidden
+                          className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold"
+                          style={{ backgroundColor: `${accent}22`, color: accentInk }}
+                        >
+                          {p.name.charAt(0)}
+                        </span>
+                      )}
+                      <span className="max-w-[9rem] truncate">{p.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {/* Soonest-available shortcut: one tap to the earliest open time
-              across every service (the day loads and the exact slot binds). */}
-          {openInfo && openInfo !== "unavailable" && openInfo.soonest && (
+              across every service (the day loads and the exact slot binds).
+              Hidden once a person is chosen: the scan is shop-wide, so its
+              soonest time may belong to somebody else. */}
+          {!chosenPerson && openInfo && openInfo !== "unavailable" && openInfo.soonest && (
             <button
               type="button"
               onClick={pickSoonestOpen}
@@ -3214,10 +3403,25 @@ export function BookingClient({
               </button>
             </div>
           )}
-          {!dayLoading && !dayError && calendarDays.size === 0 && (
+          {!dayLoading && !dayError && calendarDays.size === 0 && !chosenPerson && (
             <p className="text-sm text-muted">
               No open days right now — check back soon.
             </p>
+          )}
+          {!dayLoading && !dayError && calendarDays.size === 0 && chosenPerson && (
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-muted" role="status">
+                {chosenPerson.name} has no open days right now.
+              </p>
+              <button
+                type="button"
+                onClick={() => choosePerson(null)}
+                className="w-full rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-colors"
+                style={{ borderColor: accent, color: accentInk }}
+              >
+                See any available {vocab.providerNoun} →
+              </button>
+            </div>
           )}
           {!dayLoading && dayData && visibleDay && (
             <div className="flex flex-col gap-5">
@@ -3691,6 +3895,17 @@ export function BookingClient({
           // heading on the bottom edge with the form still off-screen.
           revealOnMount={!demoTour}
         >
+          {/* WHO THE BOOKING IS WITH, said before anything is filled in. On
+              "Any available" the page chose the person, so this is the first
+              time the customer sees a name - it used to be the confirmation
+              screen, after the booking was already made. Only where there is
+              more than one person: a one-person shop has nothing to tell. */}
+          {data.staff.length > 1 && pickedStaffName && (
+            <p className="mb-3 text-sm" data-testid="booking-with" role="status">
+              <span className="text-muted">With </span>
+              <span className="font-semibold">{pickedStaffName}</span>
+            </p>
+          )}
           {/* Optional add-ons for the chosen service (a targeted slot's
               length/price are fixed, so add-ons don't apply there). */}
           {!slotTargeted && addOnsForService.length > 0 && (

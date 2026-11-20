@@ -48,6 +48,7 @@
     "./walkInBackdate": "./src/walkInBackdate.ts",
     "./clientIdentity": "./src/clientIdentity.ts",
     "./bookingLinks": "./src/bookingLinks.ts",
+    "./fairChair": "./src/fairChair.ts",
     "./bookingPolicy": "./src/bookingPolicy.ts",
     "./clientNote": "./src/clientNote.ts",
     "./serviceVisibility": "./src/serviceVisibility.ts",

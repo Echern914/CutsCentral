@@ -116,8 +116,11 @@ export function rebookPath(
 ): string {
   const query: string[] = [];
   if (prefill?.serviceId) query.push(`service=${encodeURIComponent(prefill.serviceId)}`);
-  // A provider without a service pre-picks nothing the page can use.
-  if (prefill?.serviceId && prefill.staffId) query.push(`staff=${encodeURIComponent(prefill.staffId)}`);
+  // A provider with no service still narrows the page to that person's times
+  // (the row of people at the top of the booking page) - the same link the
+  // shop page's "Book with <name>" sends. It used to be dropped here because
+  // the page could do nothing with it.
+  if (prefill?.staffId) query.push(`staff=${encodeURIComponent(prefill.staffId)}`);
   return `/book/${encodeURIComponent(slug)}${query.length > 0 ? `?${query.join("&")}` : ""}`;
 }
 

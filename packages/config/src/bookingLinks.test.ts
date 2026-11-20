@@ -108,8 +108,12 @@ describe("rebookPath - Book again lands on the same service", () => {
   it("leaves off what it does not have - never an empty parameter", () => {
     expect(rebookPath("fresh-cuts", { serviceId: "svc_1", staffId: null })).toBe("/book/fresh-cuts?service=svc_1");
     expect(rebookPath("fresh-cuts", null)).toBe("/book/fresh-cuts");
-    // A provider alone pre-picks nothing the page can use.
-    expect(rebookPath("fresh-cuts", { serviceId: null, staffId: "stf_9" })).toBe("/book/fresh-cuts");
+  });
+
+  it("a provider alone is kept: the booking page narrows to that person's times", () => {
+    expect(rebookPath("fresh-cuts", { serviceId: null, staffId: "stf_9" })).toBe(
+      "/book/fresh-cuts?staff=stf_9",
+    );
   });
 
   it("encodes what it is handed", () => {
