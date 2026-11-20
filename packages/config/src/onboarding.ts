@@ -73,15 +73,46 @@ export function onboardingStepDone(step: OnboardingStepId, f: OnboardingFacts): 
 }
 
 /**
- * Clients can book: how they book is chosen, and a shop booking on ChairBack
- * has chairs, services and everyone's hours. Bringing clients is optional. Until
- * this is true the dashboard is a setup checklist with nothing else competing
- * for attention (no trial banner, no go-live bell, no referral card).
+ * 🔴 THE ONE RULE FOR "CLIENTS CAN BOOK THIS SHOP".
+ *
+ * How they book is chosen, and a shop booking on ChairBack has someone to
+ * book, something to book, and at least ONE person with hours. Not everyone:
+ * one person with hours is a page that takes bookings.
+ *
+ * There used to be two rules. Setup's last screen said "You're live" with one
+ * person's hours set, and the dashboard's checklist then said "Clients can book
+ * you once these are done" because a second person had none - both true to
+ * their own rule, and together a shop that could not tell whether it was open.
+ * It mattered more once accepting an invitation started making a chair
+ * (services/memberChair.ts): that chair has no hours yet, and under the strict
+ * rule every established shop that added someone would have dropped back into
+ * setup mode, trial banner hidden and all.
+ *
+ * So this is the rule for the STATE, and the `hours` step below stays strict
+ * for the WORK: setup still walks every person's hours, the checklist still
+ * shows the step open, and `peopleWithoutHours` says how many are left.
+ */
+export function clientsCanBook(f: OnboardingFacts): boolean {
+  if (!f.hasShop || !bookingChosen(f)) return false;
+  if (!booksOnChairBack(f)) return true;
+  return f.staffCount > 0 && f.serviceCount > 0 && f.staffWithHours > 0;
+}
+
+/** People who take appointments here and have no hours yet - nobody can book them. */
+export function peopleWithoutHours(f: OnboardingFacts): number {
+  if (!booksOnChairBack(f)) return 0;
+  return Math.max(0, f.staffCount - f.staffWithHours);
+}
+
+/**
+ * Setup is far enough along that clients can book (`clientsCanBook`). Bringing
+ * clients is optional. Until this is true the dashboard is a setup checklist
+ * with nothing else competing for attention (no trial banner, no go-live bell,
+ * no referral card). After it, anyone still without hours is a notice on the
+ * dashboard, not a reason to take it over again.
  */
 export function setupComplete(f: OnboardingFacts): boolean {
-  return onboardingPlan(f)
-    .filter((s) => s !== "shop" && s !== "clients" && s !== "done")
-    .every((s) => onboardingStepDone(s, f));
+  return clientsCanBook(f);
 }
 
 /** The first step still to do. */
@@ -194,9 +225,14 @@ export function setupBrief(f: OnboardingFacts): SetupBrief {
       const [finding, fix] = STEP_WHY[s](f);
       return { id: s, title: ONBOARDING_STEP_LABEL[s], finding, fix, href: ONBOARDING_PATH[s], optional: s === "clients" };
     });
-  const headline = complete
-    ? "You're set up — clients can book you."
-    : `${left.length} step${left.length === 1 ? "" : "s"} left before clients can book you (${required.length - left.length} of ${required.length} done).`;
+  // Bookable, with people still to finish: say both, so "you're set up" is
+  // never read over the top of two people nobody can book.
+  const noHours = peopleWithoutHours(f);
+  const headline = !complete
+    ? `${left.length} step${left.length === 1 ? "" : "s"} left before clients can book you (${required.length - left.length} of ${required.length} done).`
+    : noHours > 0
+      ? `Clients can book you. ${noHours} of ${f.staffCount} people still need hours before anyone can book them.`
+      : "You're set up — clients can book you.";
   return { complete, headline, items };
 }
 

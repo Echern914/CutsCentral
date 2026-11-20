@@ -78,9 +78,17 @@ export default async function TeamPage() {
     );
   }
 
+  // A shop already running as a team of independent businesses, with no staff
+  // logins of its own: that card is their page, so it stays on top. Everyone
+  // else sees staff logins first (see TeamClient).
+  const independentFirst =
+    Boolean(links && links.active.length + links.pending.length > 0) &&
+    data.members.length <= 1 &&
+    data.invites.length === 0;
+
   return (
     <main className="mx-auto w-full max-w-4xl px-5 py-8">
-      <TeamClient initial={data} vocab={vocab}>
+      <TeamClient initial={data} vocab={vocab} independentFirst={independentFirst}>
         {links && (
           <IndependentTeam
             initial={links}

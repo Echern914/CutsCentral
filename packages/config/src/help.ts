@@ -214,7 +214,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "set-hours",
     q: "How do I set my hours?",
-    a: "Two layers, and the order matters.\n\nThe ceiling is per person: Calendar → Staff → Hours sets the days and times someone actually works. Nothing can be booked outside that.\n\nThen each service can narrow it further — a service you only do on weekends simply isn't bookable midweek. Service hours can shorten your day, never extend it, so if a time is missing, widen the staff hours first.\n\nThe one exception is a one-off: to open a service earlier or later on chosen days, like a holiday week, see “Can I set different hours for just a few days?”.\n\nIf you're the only one in the shop, saving hours on a service widens your own week to match, so you set them once and you're done.\n\nMoving from Booksy, TheCut or Google? In the Hours sheet, tap Paste hours from another app and paste your week: it fills in the days for you to check before you save.",
+    a: "Two layers, and the order matters.\n\nThe ceiling is per person: Calendar → Staff → Hours sets the days and times someone actually works. Nothing can be booked outside that.\n\nThen each service can narrow it further — a service you only do on weekends simply isn't bookable midweek. Service hours can shorten your day, never extend it, so if a time is missing, widen the staff hours first.\n\nThe one exception is a one-off: to open a service earlier or later on chosen days, like a holiday week, see “Can I set different hours for just a few days?”.\n\nIf you're the only one in the shop, saving hours on a service widens your own week to match, so you set them once and you're done.\n\nMoving from Booksy, TheCut or Google? In the Hours sheet, tap Paste hours from another app and paste your week: it fills in the days for you to check before you save.\n\nSetting up several people who keep the same week? Set one person's hours, then open the next person's Hours and choose them under Copy hours from. It fills in their days and breaks for you to check; nothing is saved until you tap Save hours.",
     keywords: [
       "hours", "availability", "schedule", "open times", "when i work",
       "working hours", "shifts", "change hours", "edit hours", "update hours",
@@ -222,6 +222,7 @@ export const HELP_ANSWERS: HelpAnswer[] = [
       // "what are the shop's hours" was landing on reminders: "hours" hit here
       // but "shop" did not, and half-coverage loses.
       "shop hours", "business hours", "store hours", "what are your hours",
+      "copy hours", "copy hours to another barber", "same hours for everyone", "same hours as",
     ],
     primaryFor: ["hours"],
     category: "booking",
@@ -272,8 +273,11 @@ export const HELP_ANSWERS: HelpAnswer[] = [
   {
     id: "add-staff",
     q: "How do I add another barber?",
-    a: "Add them under Staff. Each barber gets their own services and their own hours, and clients pick who they want when they book.\n\nStaff is about who takes appointments. If you also want them to sign in and see the dashboard, that's Team logins — a separate thing.",
-    keywords: ["staff", "barber", "add barber", "another barber", "provider", "chairs", "stylist", "employee"],
+    a: "Add them under Staff. Each barber gets their own services and their own hours, and clients pick who they want when they book.\n\nStaff is about who takes appointments. If you also want them to sign in and see the dashboard, that's Team logins — a separate thing.\n\nTo fix a name or add a photo, tap Edit beside them.",
+    keywords: [
+      "staff", "barber", "add barber", "another barber", "provider", "chairs", "stylist", "employee",
+      "rename a barber", "change a barber's name", "barber photo",
+    ],
     // "barber" on its own is the most ambiguous word in the corpus - it is in
     // move-appointment, remove-team-member, barber-cant-sign-in and the
     // per-barber pricing answer. Settle it here: a question that reduces to
@@ -1093,7 +1097,7 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
   {
     id: "team-logins",
     q: "Can my barbers have their own logins?",
-    a: "Yes. Invite them under Team logins and each one signs in to their own view — an employee sees their own chair and their own clients, not the whole shop's numbers.\n\nThat's separate from Staff, which is just who takes appointments.",
+    a: "Yes. On Team, under Invite someone, enter their email and pick a role, then tap Send invite. They get an email; the link works once, expires in 7 days and only for that address.\n\nA barber login sees their own day, their own clients and their own numbers, never the shop's totals or anyone else's. If you don't link them to a chair, accepting gives them their own, named after them, on your booking page; set their hours under Calendar → Staff and they can be booked.\n\nAdding your team while you set up? Put an email beside a name and the invitation goes out then.\n\nSomeone who runs their own business, like a booth renter, joins with the team link instead.",
     keywords: [
       "team", "logins", "invite", "seats", "roles", "permissions", "employee login", "manager", "access",
       // Not "invite a barber" or "add a login": "barber" and "add" pull "how do
@@ -1102,6 +1106,48 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     ],
     category: "account",
     action: { label: "Open team", featureId: "team" },
+  },
+  {
+    // Full shop, 2026-11-20: the invite has two roles and nothing said what
+    // either one could do.
+    id: "staff-login-roles",
+    q: "What can a manager or a barber login do?",
+    a: "A manager runs the shop day to day: the calendar, clients, services and Insights. They can't change billing or the team.\n\nA barber login is for one chair. They see their own day, their own clients and their own numbers (appointments, revenue and tips), never the shop's totals or another barber's clients. You can change someone's role on Team at any time.",
+    keywords: [
+      "manager login", "barber login", "what can a manager do", "what can a manager see",
+      "what can my barber see", "what does a barber see", "manager or barber",
+      "difference between manager and barber",
+    ],
+    category: "account",
+    action: { label: "Open team", featureId: "team" },
+  },
+  {
+    // Full shop, 2026-11-20: the team link sat above the invite, and an
+    // employee who followed it was told to start their own business.
+    id: "employee-or-independent",
+    q: "Do I invite someone or send them the team link?",
+    a: "Someone you employ: use Invite someone on Team. They get a staff login inside your shop, and their clients and bookings are your shop's.\n\nSomeone who runs their own business, like a booth renter: send them the team link under Independent barbers. They keep their own business, clients and payments, and share only what they choose.",
+    keywords: [
+      "invite or team link", "team link or invite", "which one do i use", "employee or booth renter",
+      "employee or independent", "staff login or team link", "which link do i send",
+    ],
+    category: "account",
+    action: { label: "Open team", featureId: "team" },
+  },
+  {
+    id: "per-barber-report",
+    // 🔴 No bare "each" in q or keywords: it is not a stopword, so it handed
+    // this entry "What does each subscription include?" and pushed the plans
+    // answer out of the suggestions (the support eval caught it).
+    q: "How do I see revenue and tips by barber?",
+    a: "On Insights, By barber splits the totals by who took each appointment: appointments, revenue and tips. It appears once more than one person takes appointments, and it follows the range picked at the top.\n\nBookings synced from Acuity or Square don't record who did them, so they sit on a Not assigned line, and the lines always add up to the totals. Each barber with a staff login sees their own line under My numbers on their home screen, and nobody else's.\n\nChairBack doesn't pay anyone: use these numbers to work out commission or payroll.",
+    keywords: [
+      "what my barbers made", "what did my barbers make", "barber earnings", "how much did my barber make",
+      "barber revenue", "revenue by barber", "my barbers numbers", "compare my barbers",
+      "pay my barbers", "payroll", "my numbers", "my own numbers",
+    ],
+    category: "account",
+    action: { label: "Open insights", featureId: "insights" },
   },
 
   /* ----- Independent barbers on a shop's team (TeamLink, Snow 2026-10-15) ---- */
@@ -1133,7 +1179,9 @@ When the trial ends your shop stops taking bookings until you pick a plan, start
     a: "On Team, pick Last 7 days, Last 30 days or Last 3 months. Team overview adds up your independent barbers' visits, revenue and clients, with an arrow against the period before, and shows how many of those paying rent are paid up.\n\nA total only counts barbers who share that number, and says so (“From 2 of 3 sharing”), so it's never passed off as the whole team's. Each barber's own numbers are under Your team, and Team activity lists who asked to join, joined or left, what anyone started or stopped sharing, and the rent you recorded — never anyone's numbers.",
     keywords: [
       "team totals", "team numbers", "team stats", "how is my team doing", "team overview",
-      "team activity", "team performance", "my barbers numbers", "compare my barbers", "whole team",
+      // NOT "my barbers numbers" / "compare my barbers": those are the
+      // per-barber report's (an owner's own staff), not the team link's.
+      "team activity", "team performance", "whole team",
     ],
     category: "account",
     action: { label: "Open team", featureId: "team" },

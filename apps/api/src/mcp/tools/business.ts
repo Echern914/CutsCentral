@@ -4,8 +4,8 @@ import {
   readChairEvents,
   serviceKey,
   serviceLabel,
-  type ChairEvent,
 } from "../../engines/insightsWindow.js";
+import { addToTally, chairTally, emptyTally, type WorkTally } from "../../engines/chairReport.js";
 import {
   INVALID_ARGS,
   type ToolDefinition,
@@ -70,18 +70,9 @@ const schema = z
 /** Whole dollars, matching what the Insights page reports. */
 const money = (n: number) => Math.round(n);
 
-interface Tally {
-  cuts: number;
-  noShows: number;
-  earned: number;
-}
-const tally = (): Tally => ({ cuts: 0, noShows: 0, earned: 0 });
-
-function add(t: Tally, e: ChairEvent): void {
-  t.cuts += 1;
-  if (e.noShow) t.noShows += 1;
-  t.earned += e.earned;
-}
+// Who each event is counted against is decided in engines/chairReport.ts, the
+// same tally the Insights page's per-person card reads - so the assistant and
+// the page cannot split one week's money two ways.
 
 async function summary(inv: ToolInvocation): Promise<ToolResult> {
   const parsed = schema.safeParse(inv.args ?? {});
@@ -108,10 +99,9 @@ async function summary(inv: ToolInvocation): Promise<ToolResult> {
     return { events, chairs };
   });
 
-  const shop = tally();
-  const unassigned = tally();
-  const byChair = new Map<string, Tally>();
-  const byService = new Map<string, Tally & { serviceId: string | null; name: string }>();
+  const split = chairTally();
+  const { shop, unassigned, byChair } = split;
+  const byService = new Map<string, WorkTally & { serviceId: string | null; name: string }>();
 
   // Average TICKET, priced non-no-shows only: an unpriced walk-in is not a $0
   // sale and a no-show is not a sale at all. The Insights page's own rule.
@@ -126,23 +116,15 @@ async function summary(inv: ToolInvocation): Promise<ToolResult> {
       continue;
     }
 
-    add(shop, e);
+    split.add(e);
     if (e.price !== null && !e.noShow) {
       pricedTotal += e.price;
       pricedCount += 1;
     }
 
-    if (e.staffId) {
-      const t = byChair.get(e.staffId) ?? tally();
-      add(t, e);
-      byChair.set(e.staffId, t);
-    } else {
-      add(unassigned, e);
-    }
-
     const key = serviceKey(e);
-    const s = byService.get(key) ?? { ...tally(), serviceId: e.serviceId, name: serviceLabel(e) };
-    add(s, e);
+    const s = byService.get(key) ?? { ...emptyTally(), serviceId: e.serviceId, name: serviceLabel(e) };
+    addToTally(s, e);
     byService.set(key, s);
   }
 
@@ -170,7 +152,7 @@ async function summary(inv: ToolInvocation): Promise<ToolResult> {
         currency: "USD",
       },
       byChair: chairs.map((c) => {
-        const t = byChair.get(c.id) ?? tally();
+        const t = byChair.get(c.id) ?? emptyTally();
         return {
           staffId: c.id,
           chair: c.name,

@@ -1,7 +1,6 @@
-import { createHash } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { APP_NAME, apiEnv, randomToken, vocabularyForShop } from "@chairback/config";
+import { APP_NAME, apiEnv } from "@chairback/config";
 import { forShop, prisma, runAsOwner, Prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager, requireOwner } from "../auth/roles.js";
@@ -9,6 +8,8 @@ import { accountLimiter } from "../middleware/rateLimit.js";
 import { emailEnabled, sendEmail } from "../messaging/email.js";
 import { applyChairLink, releaseChairLink } from "../services/staffUserLink.js";
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
+import { createChairForPerson } from "../services/memberChair.js";
+import { sendTeamInvite } from "../services/teamInvite.js";
 import { setupProgress } from "@chairback/config/onboarding";
 import { onboardingFactsFor } from "../engines/onboardingFacts.js";
 import {
@@ -75,13 +76,6 @@ export const teamRouter: Router = Router();
 // reading the roster; accepting an invite is a different router (teamJoin.ts)
 // and is unaffected.
 teamRouter.use(requireUser, requireShop, requireManager, requireActiveAccess);
-
-/** A week: long enough for a barber to get to it, short enough to bound a stale mailbox. */
-const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-function sha256Hex(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
 
 /**
  * GET /api/team — everyone who can sign in, plus outstanding invitations.
@@ -218,49 +212,19 @@ teamRouter.post("/invites", accountLimiter, requireOwner, async (req, res) => {
     }
   }
 
-  const token = randomToken(); // 32 random bytes, base64url — unguessable
-  const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
-  // One live invite per address per shop: re-inviting supersedes the previous
-  // link so an older email can't linger as a second way in. Accepted/revoked
-  // rows are kept as an audit trail.
-  await prisma.$transaction([
-    prisma.teamInvite.deleteMany({
-      where: { shopId, email, acceptedAt: null, revokedAt: null },
-    }),
-    prisma.teamInvite.create({
-      data: {
-        shopId,
-        email,
-        role: parsed.data.role,
-        staffId: staffId ?? null,
-        tokenHash: sha256Hex(token),
-        invitedById: req.userId!,
-        expiresAt,
-      },
-    }),
-  ]);
-
-  const acceptUrl = `${env.APP_BASE_URL}/team/join?token=${encodeURIComponent(token)}`;
-  try {
-    await sendEmail({
-      to: email,
-      subject: `${req.shop!.name} invited you to ${APP_NAME}`,
-      text: [
-        `${req.shop!.name} added you to their team on ${APP_NAME}.`,
-        "",
-        "Open this link to accept:",
-        acceptUrl,
-        "",
-        `The link expires in 7 days and works once. Sign in with ${email} —`,
-        "it only works for that address.",
-        "",
-        "If you weren't expecting this, you can ignore this email.",
-      ].join("\n"),
-    });
-  } catch (err) {
+  // The token, the row and the email: services/teamInvite.ts, shared with
+  // first-time setup so the two can never mint different invitations.
+  const outcome = await sendTeamInvite({
+    shopId,
+    shopName: req.shop!.name,
+    email,
+    role: parsed.data.role,
+    staffId: staffId ?? null,
+    invitedById: req.userId!,
+  });
+  if (outcome === "email_failed") {
     // The invite row is already written; surface the send failure so the owner
     // can retry rather than believing an email went out.
-    logger.error({ err, shopId }, "team invite email failed");
     res.status(502).json({ error: "email_failed" });
     return;
   }
@@ -465,14 +429,6 @@ teamRouter.put("/owner/staff", requireOwner, async (req, res) => {
   res.json({ ok: true, staffId });
 });
 
-/** A public chair name from a person's name - never an email address. */
-function chairName(personName: string, shop: Parameters<typeof vocabularyForShop>[0]): string {
-  const name = personName.trim();
-  if (name && !name.includes("@")) return name.slice(0, 120);
-  const noun = vocabularyForShop(shop).providerNoun;
-  return `New ${noun}`;
-}
-
 /**
  * POST /api/team/members/:id/staff — give someone on the team a chair of their own.
  *
@@ -511,37 +467,28 @@ teamRouter.post("/members/:id/staff", requireOwner, async (req, res) => {
   let staffId: string;
   try {
     staffId = await prisma.$transaction(async (tx) => {
-      const chair = await tx.staff.create({
-        data: {
-          shopId,
-          // The chair's name is PUBLIC (the booking page). Some accounts carry
-          // an email address as their name (Apple sign-in without a name), and
-          // that must never be published - the owner renames it under Staff.
-          name: chairName(member.user.name, req.shop!),
-          // Only an http(s) photo, the same boundary the staff editor enforces.
-          imageUrl:
-            member.user.avatarUrl && /^https?:\/\//i.test(member.user.avatarUrl)
-              ? member.user.avatarUrl
-              : null,
-          active: true,
-        },
-        select: { id: true },
+      // The name and photo rules live in services/memberChair.ts, shared with
+      // accepting an invitation.
+      const chairId = await createChairForPerson(tx, {
+        shopId,
+        shop: req.shop!,
+        person: member.user,
       });
       // Conditional on the seat STILL having no chair, so a double-tap can't
       // leave a second, orphaned chair behind: the loser matches nothing and
       // its chair is rolled back with it.
       const linked = await tx.shopMember.updateMany({
         where: { id: member.id, shopId, staffId: null },
-        data: { staffId: chair.id },
+        data: { staffId: chairId },
       });
       if (linked.count === 0) throw new Error("already_has_chair");
       await applyChairLink(tx, {
         shopId,
         userId: member.userId,
         previousStaffId: null,
-        nextStaffId: chair.id,
+        nextStaffId: chairId,
       });
-      return chair.id;
+      return chairId;
     });
   } catch (err) {
     if (err instanceof Error && err.message === "already_has_chair") {

@@ -39,21 +39,45 @@ export async function keepOwnLinkAction(bookingUrl: string): Promise<StepResult>
   return { ok: false, error: apiAnswered(res.status) ? "Couldn't save that. Try again." : NO_ANSWER };
 }
 
-/** The chairs of the people who take appointments. Names already on a chair are skipped. */
-export async function addTeamAction(
-  names: string[],
-): Promise<{ ok: true; created: number; skipped: string[] } | { ok: false; error: string }> {
-  const res = await apiSend<{ created: { id: string; name: string }[]; skipped: string[] }>(
+/**
+ * What happened to one person's invitation. Only "sent" went out; in every
+ * other case the person is still added and bookable, and the step says where
+ * to invite them from.
+ */
+export interface SetupInvite {
+  name: string;
+  email: string;
+  outcome: "sent" | "email_unavailable" | "email_failed" | "already_member" | "already_linked";
+}
+
+/**
+ * The people who take appointments, each with an optional email. Everyone is
+ * made bookable; an email also sends that person an invitation to sign in.
+ * Names already added are skipped, so a retry never adds anyone twice.
+ */
+export async function addPeopleAction(
+  people: { name: string; email?: string }[],
+): Promise<{ ok: true; created: number; skipped: string[]; invites: SetupInvite[] } | { ok: false; error: string }> {
+  const res = await apiSend<{ created: { id: string; name: string }[]; skipped: string[]; invites?: SetupInvite[] }>(
     "POST",
     "/api/onboarding/team",
-    { names },
+    { people },
   );
   refresh();
-  if (res.ok && res.data) return { ok: true, created: res.data.created.length, skipped: res.data.skipped };
+  if (res.ok && res.data) {
+    return {
+      ok: true,
+      created: res.data.created.length,
+      skipped: res.data.skipped,
+      invites: res.data.invites ?? [],
+    };
+  }
   return {
     ok: false,
-    // A retry is safe: names already on a chair are skipped.
-    error: apiAnswered(res.status) ? "Couldn't add them. Check the names and try again." : `${NO_ANSWER} Anyone already added won't be added twice.`,
+    // A retry is safe: names already added are skipped.
+    error: apiAnswered(res.status)
+      ? "Couldn't add them. Check the names and emails and try again."
+      : `${NO_ANSWER} Anyone already added won't be added twice.`,
   };
 }
 

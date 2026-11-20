@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  clientsCanBook,
   nextOnboardingStep,
   onboardingPlan,
+  onboardingStepDone,
+  peopleWithoutHours,
   setupComplete,
   stepAfter,
   stepPosition,
@@ -57,11 +60,38 @@ describe("next step", () => {
 });
 
 describe("setup complete", () => {
-  it("🔴 booking on ChairBack: chairs, services and everyone's hours - clients are optional", () => {
+  // Deliberately changed 2026-11-20. This used to demand EVERYONE's hours,
+  // while setup's last screen called the same shop live with one person's -
+  // two rules, one shop. There is one rule now (clientsCanBook), and it is the
+  // honest one: one person with hours is a page that takes bookings.
+  it("🔴 booking on ChairBack: someone to book, a service, and ONE person's hours - clients are optional", () => {
     const native = at({ bookingMode: "native" });
     expect(setupComplete(native)).toBe(false);
-    expect(setupComplete({ ...native, staffCount: 2, serviceCount: 3, staffWithHours: 1 })).toBe(false);
+    expect(setupComplete({ ...native, staffCount: 2, serviceCount: 3 })).toBe(false);
+    expect(setupComplete({ ...native, staffCount: 2, staffWithHours: 2 })).toBe(false);
+    expect(setupComplete({ ...native, staffCount: 2, serviceCount: 3, staffWithHours: 1 })).toBe(true);
     expect(setupComplete({ ...native, staffCount: 2, serviceCount: 3, staffWithHours: 2 })).toBe(true);
+  });
+
+  it("🔴 an established shop that adds someone with no hours yet stays out of setup mode", () => {
+    const open = at({ bookingMode: "native", staffCount: 3, serviceCount: 5, staffWithHours: 3, clientCount: 200 });
+    expect(setupComplete(open)).toBe(true);
+    // The new person: a chair made when they accepted their invitation.
+    const grew = { ...open, staffCount: 4 };
+    expect(setupComplete(grew)).toBe(true);
+    expect(clientsCanBook(grew)).toBe(true);
+    expect(peopleWithoutHours(grew)).toBe(1);
+    // ...while the WORK is still listed: the hours step is open for them.
+    expect(onboardingStepDone("hours", grew)).toBe(false);
+    expect(nextOnboardingStep(grew)).toBe("hours");
+  });
+
+  it("no shop is never bookable, whatever else is set", () => {
+    expect(clientsCanBook(at({ hasShop: false, bookingMode: "native", staffCount: 1, serviceCount: 1, staffWithHours: 1 }))).toBe(false);
+  });
+
+  it("a shop that books elsewhere has nobody 'without hours' to chase", () => {
+    expect(peopleWithoutHours(at({ bookingUrl: "https://vagaro.com/me", staffCount: 2 }))).toBe(0);
   });
 
   it("their own link or a connected calendar: choosing it is the whole of it", () => {

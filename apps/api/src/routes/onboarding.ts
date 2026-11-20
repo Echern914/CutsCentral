@@ -7,6 +7,8 @@ import { requireOwner } from "../auth/roles.js";
 import { accountLimiter } from "../middleware/rateLimit.js";
 import { nameKey } from "../engines/acuityServiceImport.js";
 import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
+import { emailEnabled } from "../messaging/email.js";
+import { sendTeamInvite } from "../services/teamInvite.js";
 
 /**
  * FIRST-TIME SETUP (web /onboarding, config/onboarding.ts).
@@ -86,15 +88,67 @@ onboardingRouter.get("/state", async (req, res) => {
   });
 });
 
-const teamSchema = z
-  .object({ names: z.array(z.string().trim().min(1).max(60)).min(1).max(20) })
-  .strict();
+const personNameSchema = z.string().trim().min(1).max(60);
+const teamSchema = z.union([
+  // Names only: the solo path, and every client built before `people` existed.
+  z.object({ names: z.array(personNameSchema).min(1).max(20) }).strict(),
+  // A team: each person by name, with an email for anyone who should get a
+  // login of their own. Blank email = a chair, no login (the owner invites
+  // them later on Team).
+  z
+    .object({
+      people: z
+        .array(
+          z
+            .object({
+              name: personNameSchema,
+              email: z.string().trim().email().max(200).optional().or(z.literal("")),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(20),
+    })
+    .strict()
+    // One address is one login: the second invitation to an address replaces
+    // the first, so two people sharing one would leave one of them with no way
+    // in and no warning.
+    .refine(
+      (d) => {
+        const emails = d.people.map((p) => (p.email ?? "").toLowerCase()).filter(Boolean);
+        return new Set(emails).size === emails.length;
+      },
+      { message: "Each email can be used for one person." },
+    ),
+]);
+
+/** What happened to the invitation for one person setup was given an email for. */
+type SetupInviteOutcome =
+  | "sent"
+  // Email is not configured on this server: the chair exists, nothing was sent.
+  | "email_unavailable"
+  // The send failed. The invitation is written; the owner resends it on Team.
+  | "email_failed"
+  // That address already signs in to this shop (the owner's own, or a retry
+  // after they accepted).
+  | "already_member"
+  // Their chair is already linked to someone else's login.
+  | "already_linked";
 
 /**
  * POST /team - the chairs of the people who take appointments, by name. A
  * name already on an active chair is skipped (the owner who comes back, a
  * second tap, a lost answer retried), so this never makes anyone twice. Each
  * new chair is offered every "offered by all" service, like Add staff.
+ *
+ * With `people`, anyone given an email is also sent the same invitation the
+ * Team page sends (services/teamInvite.ts), naming THEIR chair - so when they
+ * accept, they open their own day instead of a screen asking the owner to
+ * link them. The chairs are made whether or not a single email goes out: a
+ * shop is bookable without anyone else signing in, and each invitation's
+ * outcome comes back so setup can say which ones to resend from Team. A
+ * retry is safe: the name is skipped, the invitation is sent again for the
+ * chair that name already has, and the earlier link stops working.
  *
  * The owner's own chair is an ordinary chair named after them, NOT linked to
  * their login: a linked owner's day-ahead reminder would narrow from the
@@ -108,27 +162,74 @@ onboardingRouter.post("/team", accountLimiter, async (req, res) => {
     return;
   }
   const shopId = req.shop!.id;
+  const clean = (raw: string) => raw.replace(/\s+/g, " ").trim();
+  const people: { name: string; email: string | null }[] =
+    "people" in parsed.data
+      ? parsed.data.people.map((p) => ({ name: clean(p.name), email: p.email ? p.email.toLowerCase() : null }))
+      : parsed.data.names.map((n) => ({ name: clean(n), email: null }));
+
   const result = await runWithShop(shopId, async (tx) => {
     await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`onboardteam:${shopId}`}))`);
-    const existing = await tx.staff.findMany({ where: { shopId, active: true }, select: { name: true } });
-    const taken = new Set(existing.map((s) => nameKey(s.name)));
+    const existing = await tx.staff.findMany({ where: { shopId, active: true }, select: { id: true, name: true } });
+    // Name -> the chair that has it, old or just made: what an invitation names.
+    const chairByName = new Map(existing.map((s) => [nameKey(s.name), s.id]));
     const created: { id: string; name: string }[] = [];
     const skipped: string[] = [];
-    for (const raw of parsed.data.names) {
-      const name = raw.replace(/\s+/g, " ").trim();
+    for (const { name } of people) {
       const key = nameKey(name);
-      if (taken.has(key)) {
+      if (chairByName.has(key)) {
         skipped.push(name);
         continue;
       }
-      taken.add(key);
-      created.push(await tx.staff.create({ data: { shopId, name, active: true }, select: { id: true, name: true } }));
+      const chair = await tx.staff.create({ data: { shopId, name, active: true }, select: { id: true, name: true } });
+      chairByName.set(key, chair.id);
+      created.push(chair);
     }
-    return { created, skipped };
+    return { created, skipped, chairByName };
   });
   // After the commit, like Add staff: a chair is real without its services.
   for (const s of result.created) await linkStaffToOfferedByAllServices(shopId, s.id);
-  res.status(201).json(result);
+
+  // The invitations, last: by now every chair is committed and offered, so
+  // nothing below can cost the shop a chair.
+  const invites: { name: string; email: string; outcome: SetupInviteOutcome }[] = [];
+  const wanted = people.filter((p): p is { name: string; email: string } => p.email !== null);
+  if (wanted.length > 0) {
+    const canSend = emailEnabled();
+    // Plain prisma for both: the joined User is default-deny inside a tenant
+    // transaction, and ShopMember.staffId is unique across shops anyway.
+    const [members, owner] = canSend
+      ? await Promise.all([
+          prisma.shopMember.findMany({
+            where: { shopId },
+            select: { staffId: true, user: { select: { email: true } } },
+          }),
+          prisma.user.findUnique({ where: { id: req.userId! }, select: { email: true } }),
+        ])
+      : [[], null];
+    const onTeam = new Set(members.map((m) => m.user.email.toLowerCase()));
+    if (owner) onTeam.add(owner.email.toLowerCase());
+    const claimedChairs = new Set(members.map((m) => m.staffId).filter((id): id is string => id !== null));
+    for (const p of wanted) {
+      const chairId = result.chairByName.get(nameKey(p.name)) ?? null;
+      let outcome: SetupInviteOutcome;
+      if (!canSend) outcome = "email_unavailable";
+      else if (onTeam.has(p.email)) outcome = "already_member";
+      else if (!chairId || claimedChairs.has(chairId)) outcome = "already_linked";
+      else {
+        outcome = await sendTeamInvite({
+          shopId,
+          shopName: req.shop!.name,
+          email: p.email,
+          role: "BARBER",
+          staffId: chairId,
+          invitedById: req.userId!,
+        });
+      }
+      invites.push({ name: p.name, email: p.email, outcome });
+    }
+  }
+  res.status(201).json({ created: result.created, skipped: result.skipped, invites });
 });
 
 /**

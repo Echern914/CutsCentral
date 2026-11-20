@@ -18,11 +18,7 @@ import {
   type ChairEvent,
   type ResolvedPeriod,
 } from "./insightsWindow.js";
-import {
-  appointmentTipSnapshot,
-  stripeCollectedCents,
-  type PaymentRowFacts,
-} from "./appointmentPayment.js";
+import { readVisitTips } from "./chairReport.js";
 
 /**
  * THE STATS STRIP: every card's series for one grain, in one read.
@@ -181,42 +177,8 @@ export async function readStats(
   // sheet's Tip row. Both go through appointmentTipSnapshot - the one place a
   // visit's tips are added - so this card and the sheet can never disagree.
   // Tips stay OUT of revenue.
-  const tipAppts = await tx.appointment.findMany({
-    where: {
-      shopId: shop.id,
-      startsAt: { gte: from, lt: to },
-      OR: [{ recordedTipCents: { not: null } }, { payments: { some: { purpose: "tip" } } }],
-    },
-    select: {
-      startsAt: true,
-      recordedTipCents: true,
-      recordedTipMethod: true,
-      payments: {
-        where: { purpose: "tip" },
-        select: { status: true, amount: true, capturedAmount: true, refundedAmount: true },
-      },
-    },
-  });
-  // At most one LIVE tip per visit (Payment_appointmentId_tip_live_key); a
-  // failed attempt beside it collects nothing, so the live one is the one
-  // that collected the most.
-  const liveTip = (rows: PaymentRowFacts[]) =>
-    rows.reduce<PaymentRowFacts | null>(
-      (best, p) => (best === null || stripeCollectedCents(p) > stripeCollectedCents(best) ? p : best),
-      null,
-    );
-  const tips: StatsTip[] = tipAppts
-    .map((a) => ({
-      start: a.startsAt,
-      cents: appointmentTipSnapshot({
-        online: liveTip(a.payments),
-        recorded:
-          a.recordedTipCents !== null && a.recordedTipMethod !== null
-            ? { cents: a.recordedTipCents, method: a.recordedTipMethod }
-            : null,
-      }).totalCents,
-    }))
-    .filter((t) => t.cents > 0);
+  // Read in engines/chairReport.ts, which the per-person report shares.
+  const tips: StatsTip[] = await readVisitTips(tx, shop.id, from, to);
 
   // First-ever booking for each client seen in the DISPLAYED window, across
   // both systems: a client whose first visit was on Acuity is not new because

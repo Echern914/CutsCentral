@@ -5,6 +5,8 @@ import { Card } from "@/components/ui/Card";
 import { TEAM_LINK_COOKIE, teamKeyOk } from "@/lib/teamLinkCookie";
 import { BackfillPoller } from "./BackfillPoller";
 import { FinishSetup, ShareLink } from "./FinishSetup";
+import { clientsCanBook } from "@chairback/config/onboarding";
+import { nameList } from "@/lib/nameList";
 import { getOnboardingState } from "../state";
 
 // Distinct document title per route (WCAG 2.4.2) via the root %s template.
@@ -29,9 +31,13 @@ export default async function OnboardingDonePage() {
   const teams = teamsRes.ok ? (teamsRes.data?.links ?? []) : [];
   const facts = setup?.facts;
   const native = facts?.bookingMode === "native";
-  // Bookable: a chair, a service and someone's hours. Anything missing stays
-  // on the dashboard's checklist - said here, never blocked on.
-  const bookable = Boolean(native && facts && facts.staffCount > 0 && facts.serviceCount > 0 && facts.staffWithHours > 0);
+  // Bookable: someone to book, a service and someone's hours - the ONE rule
+  // (config/onboarding.ts clientsCanBook), the same one the dashboard reads, so
+  // this screen and the checklist can't call the same shop live and not live.
+  // Anything missing stays on the dashboard - said here, never blocked on.
+  const bookable = Boolean(native && facts && clientsCanBook(facts));
+  // People who still have no hours: bookable shop, but nobody can book THEM.
+  const noHours = (setup?.staff ?? []).filter((s) => !s.hasHours).map((s) => s.name);
   const appBase = process.env.APP_BASE_URL ?? "";
   const bookUrl = setup?.shop.slug ? `${appBase}/book/${setup.shop.slug}` : null;
 
@@ -54,6 +60,12 @@ export default async function OnboardingDonePage() {
             <>
               <p className="text-sm text-muted">Clients can book you here. Put it in your Instagram bio and send it to your regulars.</p>
               <ShareLink url={bookUrl} />
+              {noHours.length > 0 && (
+                <p className="text-sm text-muted" data-testid="hours-left">
+                  {nameList(noHours)} {noHours.length === 1 ? "has" : "have"} no hours yet, so clients can&apos;t book
+                  them until you set some. It&apos;s on your dashboard.
+                </p>
+              )}
             </>
           ) : (
             <p className="text-sm text-muted" data-testid="setup-left">

@@ -47,6 +47,14 @@ describe("setupBrief", () => {
     expect(b.complete).toBe(true);
     expect(b.items.map((i) => [i.id, i.optional])).toEqual([["clients", true]]);
   });
+
+  it("🔴 bookable with someone still missing hours: says both, and keeps the hours step listed", () => {
+    const b = setupBrief(facts({ staffCount: 3, serviceCount: 3, staffWithHours: 2 }));
+    expect(b.complete).toBe(true);
+    expect(b.headline).toMatch(/^Clients can book you\. 1 of 3 people still need hours/);
+    expect(b.headline).not.toMatch(/You're set up/);
+    expect(b.items.map((i) => i.id)).toEqual(["hours", "clients"]);
+  });
 });
 
 describe("the Assistant, asked about setup", () => {
