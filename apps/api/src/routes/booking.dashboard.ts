@@ -165,8 +165,6 @@ import {
 import {
   effectiveDurationAt,
   effectivePriceAt,
-  openingSpansForWeekday,
-  parseServiceHours,
 } from "../engines/pricing.js";
 import { movedLengthMin } from "../engines/moveLength.js";
 import {
@@ -208,6 +206,11 @@ import { createServicesInBulk } from "../engines/serviceBulkCreate.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
 import { teamScheduleHook } from "../middleware/teamScheduleHook.js";
+import {
+  availabilitySchema,
+  readStaffAvailability,
+  replaceStaffAvailability,
+} from "../services/staffAvailability.js";
 import { liveAttemptFor } from "../services/serviceCheckoutAttempt.js";
 
 /**
@@ -1629,125 +1632,17 @@ bookingDashboardRouter.delete("/staff/:id", async (req, res) => {
 
 //  Availability (weekly rules + one-off exceptions), per staff
 
-const ruleSchema = z.object({
-  weekday: z.number().int().min(0).max(6),
-  startMin: z.number().int().min(0).max(1440),
-  endMin: z.number().int().min(0).max(1440),
-});
-// A recurring weekly block-off: same shape as a rule + an optional label.
-const blockSchema = ruleSchema.extend({
-  reason: z.string().trim().max(200).optional(),
-});
-const availabilitySchema = z
-  .object({
-    rules: z.array(ruleSchema).max(100),
-    // Recurring weekly block-offs (standing breaks). Replace-all like rules.
-    recurringBlocks: z.array(blockSchema).max(100).optional().default([]),
-  })
-  .strict()
-  .refine(
-    (d) =>
-      d.rules.every((r) => r.endMin > r.startMin) &&
-      d.recurringBlocks.every((b) => b.endMin > b.startMin),
-    { message: "Each rule/block's end must be after its start." },
-  );
-
+// The schema, the read and the replace-all write live in
+// services/staffAvailability.ts: a team member's own calendar edits hours
+// through the same code (routes/barberCalendar.ts).
 bookingDashboardRouter.get("/staff/:id/availability", async (req, res) => {
-  const db = forShop(req.shop!.id);
-  const staff = await db.staff.findFirst({
-    where: { id: req.params.id },
-    select: { id: true },
-  });
-  if (!staff) {
+  const week = await readStaffAvailability(req.shop!.id, req.params.id!);
+  if (!week) {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [rules, recurringBlocks, exceptions] = await Promise.all([
-    db.availabilityRule.findMany({
-      where: { staffId: req.params.id },
-      orderBy: [{ weekday: "asc" }, { startMin: "asc" }],
-    }),
-    db.recurringBlock.findMany({
-      where: { staffId: req.params.id },
-      orderBy: [{ weekday: "asc" }, { startMin: "asc" }],
-    }),
-    db.availabilityException.findMany({
-      where: { staffId: req.params.id, endsAt: { gt: new Date() } },
-      orderBy: { startsAt: "asc" },
-    }),
-  ]);
-  res.json({
-    rules: rules.map((r) => ({
-      id: r.id,
-      weekday: r.weekday,
-      startMin: r.startMin,
-      endMin: r.endMin,
-    })),
-    recurringBlocks: recurringBlocks.map((b) => ({
-      id: b.id,
-      weekday: b.weekday,
-      startMin: b.startMin,
-      endMin: b.endMin,
-      reason: b.reason,
-    })),
-    exceptions: exceptions.map((e) => ({
-      id: e.id,
-      startsAt: e.startsAt.toISOString(),
-      endsAt: e.endsAt.toISOString(),
-      isBlock: e.isBlock,
-      reason: e.reason,
-    })),
-    // 🔴 THE DAY THE BARBER TURNS ON THAT STILL SHOWS NOTHING.
-    //
-    // Two gates decide a bookable day and only one of them is in this editor:
-    // the staff schedule says WHEN this person works, and each service's own
-    // hours say WHETHER that service is offered that weekday. A weekday
-    // present-but-empty in a service's hoursWindows means "not offered", and
-    // that veto is applied AFTER the staff hours - so a barber can tick
-    // Sunday, see it ticked, and watch the public page keep showing Sunday
-    // struck through, with nothing anywhere saying why. That is a real support
-    // text (2026-09-17, a barber who had turned Sunday on twice).
-    //
-    // So the API says which weekdays have no service behind them, and the
-    // editor can warn on exactly the days the barber just enabled.
-    weekdaysWithNoService: await weekdaysWithNoServiceFor(req.shop!.id, req.params.id!),
-  });
+  res.json(week);
 });
-
-/**
- * Weekdays on which NOT ONE of this staff member's active services is offered.
- *
- * Mirrors engines/slots.ts exactly, by calling the same two parsers rather than
- * restating their rules: a weekday ABSENT from hoursWindows is unrestricted,
- * PRESENT-and-empty is closed, and an "also open these hours" window
- * (timeOverrides) opens the day back up regardless of the restriction.
- */
-async function weekdaysWithNoServiceFor(shopId: string, staffId: string): Promise<number[]> {
-  const db = forShop(shopId);
-  const links = await db.serviceStaff.findMany({
-    where: { staffId },
-    select: { serviceId: true },
-  });
-  if (links.length === 0) return []; // no services at all is its own readiness item
-  const services = await db.service.findMany({
-    where: { id: { in: links.map((l) => l.serviceId) }, active: true },
-    select: { hoursWindows: true, timeOverrides: true },
-  });
-  if (services.length === 0) return [];
-  const out: number[] = [];
-  for (let weekday = 0; weekday < 7; weekday++) {
-    const covered = services.some((s) => {
-      const map = parseServiceHours(s.hoursWindows);
-      const windows = map.get(weekday);
-      // Absent = unrestricted; present with windows = offered within them.
-      if (windows === undefined || windows.length > 0) return true;
-      // Present but empty: only an explicit opening window can still open it.
-      return openingSpansForWeekday(s.timeOverrides, weekday).length > 0;
-    });
-    if (!covered) out.push(weekday);
-  }
-  return out;
-}
 
 // Replace the entire weekly rule set for a staff member in one transaction.
 bookingDashboardRouter.put("/staff/:id/availability", teamScheduleHook, async (req, res) => {
@@ -1756,36 +1651,7 @@ bookingDashboardRouter.put("/staff/:id/availability", teamScheduleHook, async (r
     res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
     return;
   }
-  const shopId = req.shop!.id;
-  const staffId = req.params.id!;
-  const ok = await runWithShop(shopId, async (tx) => {
-    const staff = await tx.staff.findFirst({
-      where: { id: staffId, shopId },
-      select: { id: true },
-    });
-    if (!staff) return false;
-    // Replace-all for BOTH rules and recurring blocks, atomically.
-    await tx.availabilityRule.deleteMany({ where: { shopId, staffId } });
-    if (parsed.data.rules.length > 0) {
-      await tx.availabilityRule.createMany({
-        data: parsed.data.rules.map((r) => ({ ...r, shopId, staffId })),
-      });
-    }
-    await tx.recurringBlock.deleteMany({ where: { shopId, staffId } });
-    if (parsed.data.recurringBlocks.length > 0) {
-      await tx.recurringBlock.createMany({
-        data: parsed.data.recurringBlocks.map((b) => ({
-          weekday: b.weekday,
-          startMin: b.startMin,
-          endMin: b.endMin,
-          reason: b.reason ?? null,
-          shopId,
-          staffId,
-        })),
-      });
-    }
-    return true;
-  });
+  const ok = await replaceStaffAvailability(req.shop!.id, req.params.id!, parsed.data);
   if (!ok) {
     res.status(404).json({ error: "not_found" });
     return;

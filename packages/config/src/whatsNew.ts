@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-20-team-member-own-calendar",
+    date: "2026-11-20",
+    kind: "feature",
+    title: "Your team can run their own calendar",
+    body:
+      "Someone on your team with their own login can now look at any day, set their weekly hours, take time " +
+      "off, and book, move or cancel their own clients. They still never see shop revenue, billing or anyone " +
+      "else's clients.",
+  },
+  {
     id: "2026-11-20-calendar-shows-who-each-booking-is-with",
     date: "2026-11-20",
     kind: "feature",

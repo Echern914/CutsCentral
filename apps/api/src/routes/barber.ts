@@ -1,15 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
-import { forShop, prisma, runWithShop } from "@chairback/db";
+import { forShop, prisma } from "@chairback/db";
 import { registerUserDevice } from "../services/userDevice.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireRole } from "../auth/roles.js";
-import {
-  TARGETED_SLOT_ORIGIN,
-  specialKindOf,
-  specialKinds,
-  type SpecialKind,
-} from "../engines/specialBooking.js";
+import { dayKeyIn, readChairDay } from "../services/chairDay.js";
 
 import { requireActiveAccess } from "../middleware/billing.js";
 import { noteForBarber } from "../engines/bookingIntake.js";
@@ -43,9 +38,6 @@ const homeQuerySchema = z.object({
   from: z.coerce.date(),
   to: z.coerce.date(),
 });
-
-/** Statuses that no longer occupy the chair. */
-const CLOSED = new Set(["CANCELED", "NO_SHOW"]);
 
 /**
  * Everything the barber home screen needs, in ONE round trip: who they are,
@@ -92,46 +84,6 @@ barberRouter.get("/home", async (req, res) => {
     select: { id: true, name: true },
   });
 
-  const rows = (await db.appointment.findMany({
-    where: {
-      staffId,
-      startsAt: { gte: from, lte: to },
-      // AI-receptionist holds aren't real bookings yet; keep them off the book.
-      holdExpiresAt: null,
-    },
-    orderBy: { startsAt: "asc" },
-    take: 200,
-    select: {
-      id: true,
-      status: true,
-      startsAt: true,
-      endsAt: true,
-      firstName: true,
-      lastName: true,
-      checkInStatus: true,
-      etaMinutes: true,
-      runningLate: true,
-      priceAtBooking: true,
-      staffId: true,
-      bookedVia: true,
-      service: { select: { name: true, color: true } },
-    },
-  })) as unknown as {
-    id: string;
-    status: string;
-    startsAt: Date;
-    endsAt: Date;
-    firstName: string;
-    lastName: string | null;
-    checkInStatus: string | null;
-    etaMinutes: number | null;
-    runningLate: boolean | null;
-    priceAtBooking: { toString(): string } | null;
-    staffId: string;
-    bookedVia: string | null;
-    service: { name: string; color: string | null };
-  }[];
-
   // Their own volume, counted on the chair rather than the shop. Three windows
   // in one grouped pass instead of three round trips.
   const now = new Date();
@@ -158,59 +110,26 @@ barberRouter.get("/home", async (req, res) => {
     month: completed.length,
   };
 
-  // Narrow to the SHOP's calendar day. The caller sends a generous +/-36h window
-  // because the shop's timezone isn't known until this response, so the raw rows
-  // span three local days - returning them all under a heading that says "Your
-  // day" would list tomorrow's 2pm under today. Comparing en-CA ("YYYY-MM-DD")
-  // renderings in the shop zone keeps this off the server's own clock, which
-  // would roll over at the wrong midnight.
-  const todays = rows.filter((r) => dayKeyIn(shop.timezone, r.startsAt) === todayKey);
-
-  // A booking into one of his specials carries the same "After hours" /
-  // "Special" chip the owner's calendar shows (engines/specialBooking.ts) -
-  // this is the only book an employee seat can open. The hours read runs only
-  // when today actually holds a special.
-  const specials: Map<string, SpecialKind> = todays.some(
-    (r) => r.bookedVia === TARGETED_SLOT_ORIGIN,
-  )
-    ? await runWithShop(req.shop!.id, (tx) =>
-        specialKinds(tx, req.shop!.id, shop.timezone, todays),
-      )
-    : new Map();
+  // The caller sends a generous +/-36h window because the shop's timezone isn't
+  // known until this response; the shared reader narrows it to the shop's own
+  // calendar day (services/chairDay.ts), the same read the day view uses.
+  const today = await readChairDay({
+    shopId: req.shop!.id,
+    staffId,
+    timezone: shop.timezone,
+    from,
+    to,
+    day: todayKey,
+  });
 
   res.json({
     chair: staff ? { id: staff.id, name: staff.name } : null,
     shop: { name: shop.name, timezone: shop.timezone },
-    today: todays.map((r) => ({
-      id: r.id,
-      startsAt: r.startsAt.toISOString(),
-      endsAt: r.endsAt.toISOString(),
-      status: r.status,
-      closed: CLOSED.has(r.status),
-      clientName: [r.firstName, r.lastName].filter(Boolean).join(" ").trim(),
-      service: r.service.name,
-      color: r.service.color,
-      checkInStatus: r.checkInStatus,
-      etaMinutes: r.etaMinutes,
-      runningLate: Boolean(r.runningLate),
-      // Decimal doesn't survive JSON as a number.
-      price: r.priceAtBooking?.toString() ?? null,
-      ...specialKindOf(specials, r.id),
-    })),
+    today,
     counts,
     reason: null,
   });
 });
-
-/** "YYYY-MM-DD" for an instant, in the given zone. */
-function dayKeyIn(timeZone: string, at: Date): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(at);
-}
 
 /**
  * Native push-device registration for the SEAT ITSELF - the twin of the

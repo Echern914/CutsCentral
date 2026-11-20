@@ -25,18 +25,21 @@ import {
  * every route here. The write logic lives in services/blockOff.ts.
  */
 
-const reason = z.string().trim().max(200).optional().or(z.literal(""));
+export const blockReason = z.string().trim().max(200).optional().or(z.literal(""));
+const reason = blockReason;
 /** The digest a previous 409 `appointments_overlap` handed back. */
-const confirmation = z.string().trim().min(1).max(200).optional();
+export const blockConfirmation = z.string().trim().min(1).max(200).optional();
+const confirmation = blockConfirmation;
 const DAY_KEY = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.");
 /** Shop-local minutes from midnight; end exclusive, 1440 = end of the day. */
 const fromMin = z.number().int().min(0).max(24 * 60 - 1);
 const toMin = z.number().int().min(1).max(24 * 60);
 /** The form mints one per Save and re-sends it on a retry. */
-const requestId = z
+export const blockRequestId = z
   .string()
   .regex(/^[A-Za-z0-9_-]{16,64}$/, "A request id is 16-64 letters, digits, - or _.")
   .optional();
+const requestId = blockRequestId;
 
 /**
  * "Selected services": the ids of the services the block stops, at least one.
@@ -49,11 +52,11 @@ const serviceIds = z
   .max(MAX_BLOCK_SERVICES);
 
 const windowFields = { fromMin: fromMin.optional(), toMin: toMin.optional() };
-const bothOrNeither = (d: { fromMin?: number; toMin?: number }) =>
+export const bothOrNeither = (d: { fromMin?: number; toMin?: number }) =>
   (d.fromMin === undefined) === (d.toMin === undefined);
-const BOTH_OR_NEITHER = { message: "Send both fromMin and toMin, or neither for all day." };
+export const BOTH_OR_NEITHER = { message: "Send both fromMin and toMin, or neither for all day." };
 
-const whenSchema = z.discriminatedUnion("kind", [
+export const whenSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("day"),
@@ -90,7 +93,7 @@ const createSchema = z
   })
   .strict();
 
-function toWhen(w: z.infer<typeof whenSchema>): BlockWhen {
+export function toWhen(w: z.infer<typeof whenSchema>): BlockWhen {
   if (w.kind === "continuous") return w;
   const window =
     w.fromMin !== undefined && w.toMin !== undefined ? { fromMin: w.fromMin, toMin: w.toMin } : undefined;
@@ -117,7 +120,7 @@ function sendConflict(
   });
 }
 
-function sendCreated(res: Response, req: Request, outcome: CreateBlocksOutcome, manyStaff: boolean) {
+export function sendCreated(res: Response, req: Request, outcome: CreateBlocksOutcome, manyStaff: boolean) {
   if (outcome.kind === "not_found") {
     res.status(404).json({ error: "not_found" });
     return;

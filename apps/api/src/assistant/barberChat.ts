@@ -12,6 +12,7 @@ import {
   type DashboardWriteRes,
 } from "../routes/booking.dashboard.js";
 import { claimConfirm, loadConfirm, mintConfirm, readPick, releaseConfirm, settleConfirm, signPick, type ConfirmRow } from "./confirm.js";
+import { runWriteCore } from "../services/dashboardWriteCore.js";
 import { addDays } from "./guided.js";
 import { barberIntent, timeOfDay } from "./barberRules.js";
 
@@ -633,32 +634,14 @@ async function runPick(actor: BarberActor, ctx: Ctx, name: string, args: Record<
 
 // ── confirm: the dashboard's own handlers ─────────────────────────────────
 
-/** Run one of the dashboard's write handlers in-process and keep its answer. */
-async function runCore(
+/** Run one of the dashboard's write handlers in-process and keep its answer (services/dashboardWriteCore.ts). */
+function runCore(
   core: (req: DashboardWriteReq, res: DashboardWriteRes) => Promise<void>,
   actor: BarberActor,
   body: Record<string, unknown>,
   params: Record<string, string> = {},
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  const out = { status: 200, body: {} as Record<string, unknown> };
-  const res: DashboardWriteRes = {
-    status(code: number) {
-      out.status = code;
-      return {
-        json(b: unknown) {
-          out.body = (b ?? {}) as Record<string, unknown>;
-          return undefined;
-        },
-      };
-    },
-    json(b: unknown) {
-      out.body = (b ?? {}) as Record<string, unknown>;
-      return undefined;
-    },
-  };
-  const req: DashboardWriteReq = { shop: actor.write.shop, userId: actor.write.userId, shopStaffId: actor.write.shopStaffId, body, params };
-  await core(req, res);
-  return out;
+  return runWriteCore(core, actor.write, body, params);
 }
 
 /** What a refusal from the dashboard's handler means, in words. */
