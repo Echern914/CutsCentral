@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-19-clients-pick-who-they-book-with",
+    date: "2026-11-19",
+    kind: "feature",
+    title: "Clients can pick who they book with",
+    body:
+      "If more than one person works at your shop, your booking page now shows a row of them. Clients can pick " +
+      "one and see only that person's times, or stay on Any available, which goes to whoever has the fewest " +
+      "bookings that day. They see who it is before they confirm.",
+  },
+  {
     id: "2026-11-19-stripe-needs-in-plain-words",
     date: "2026-11-19",
     kind: "feature",

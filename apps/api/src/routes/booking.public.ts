@@ -45,6 +45,8 @@ import { deriveAcuityClientKey, toE164 } from "../acuity/clientKey.js";
 import { emailAddressKey } from "../engines/broadcastAudience.js";
 import { recordEmailMarketingYes } from "../services/emailMarketingConsent.js";
 import { lastNameHasLetter } from "@chairback/config/clientIdentity";
+import { fairChairOrder } from "@chairback/config/fairChair";
+import { bookingsByChair } from "../services/chairLoad.js";
 import { computeOpenSlots, isSlotBookable } from "../engines/slots.js";
 import { staffSpanBlocked } from "../engines/blockedTime.js";
 import { lockStaffAndAssertSlotFree, SlotTakenError } from "../engines/bookingWrite.js";
@@ -818,7 +820,16 @@ bookingPublicRouter.get("/:slug", bookingReadLimiter, async (req, res) => {
     // BEFORE it renders — a badge that downloads a 503 is worse than no badge.
     // Same fact the confirmation email consults (appointmentNotify.ts).
     walletPass: { appointment: appointmentWalletEnabled() },
-    staff,
+    // `weekdays` (0-6, shop-local) = the days this person keeps hours, so when
+    // a customer picks one person the calendar can grey the days they are off
+    // instead of offering a day that can only come back empty. A hint for the
+    // calendar, like `openWeekdays` below - real times are still fetched per day.
+    staff: staff.map((s) => ({
+      ...s,
+      weekdays: [
+        ...new Set(availRules.filter((r) => r.staffId === s.id).map((r) => r.weekday)),
+      ].sort((a, b) => a - b),
+    })),
     services: services.map((s) => {
       const base = s.price === null ? null : Number(s.price);
       const overrides = parsePriceOverrides(s.priceOverrides);
@@ -1153,6 +1164,19 @@ async function computeDayBody(
   for (const l of links) {
     staffByService.set(l.serviceId, [...(staffByService.get(l.serviceId) ?? []), l.staffId]);
   }
+  // WHOSE TURN IT IS when a time is open with more than one person. The page
+  // books the FIRST id on a slot, and that list used to come out in the order
+  // the database returned the service links - in practice the order the chairs
+  // were created, so the first chair took nearly every "anyone is fine"
+  // booking. Now the person with the fewest bookings this day leads
+  // (config/fairChair.ts). Asked only when two or more people work here: a
+  // one-person shop runs no extra query and gets the same body as before.
+  // No cache problem: a booking moves the shop's availability generation, so
+  // the next read recounts.
+  const chairLoad =
+    activeStaff.length > 1
+      ? await bookingsByChair(shop.id, dayStart, dayEnd)
+      : new Map<string, number>();
   const midDay = new Date((dayStart.getTime() + dayEnd.getTime()) / 2);
 
   /**
@@ -1214,7 +1238,8 @@ async function computeDayBody(
     const dayPrice = card.price;
     const out: DaySlotOut[] = [...merged.entries()]
       .map(([startsAt, ids]): DaySlotOut => {
-        const slot: DaySlotOut = { startsAt, staffIds: ids };
+        // Fairest first: the page books staffIds[0] on "any available".
+        const slot: DaySlotOut = { startsAt, staffIds: fairChairOrder(ids, chairLoad, date) };
         // Full-layer resolve for THIS slot's start instant; attach only when a
         // window makes it differ from the day-level values, so the payload (and
         // the UI's badging rule) stay exactly as before for window-less shops.

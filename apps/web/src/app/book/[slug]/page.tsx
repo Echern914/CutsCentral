@@ -147,7 +147,18 @@ export interface BookShopData {
    * badge rather than rendering one that downloads a 503.
    */
   walletPass?: { appointment: boolean };
-  staff: { id: string; name: string; bio: string | null; imageUrl: string | null }[];
+  staff: {
+    id: string;
+    name: string;
+    bio: string | null;
+    imageUrl: string | null;
+    /**
+     * Weekdays (0-6, shop-local) this person keeps hours: greys the days they
+     * are off once a customer picks them. Optional so a web deploy ahead of the
+     * API still works (every day is then treated as possible for them).
+     */
+    weekdays?: number[];
+  }[];
   services: {
     id: string;
     name: string;
