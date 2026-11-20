@@ -255,12 +255,12 @@ describe("runTrialReminders", () => {
     expect(mine()[0]!.subject).toContain("trial has ended");
   });
 
-  describe("a shop on the standard trial, from the day it signs up", () => {
+  describe("a shop still on a 7-day trial (signed up 2026-11-08 to 11-20), from the day it signs up", () => {
     const signedUp = new Date(NOW.getTime() - 2 * 60 * 60 * 1000);
     const newShop = () =>
       makeShop({
         createdAt: signedUp,
-        trialEndsAt: new Date(signedUp.getTime() + BILLING.trialDays * MS_PER_DAY),
+        trialEndsAt: new Date(signedUp.getTime() + 7 * MS_PER_DAY),
       });
     const day = (n: number) => new Date(NOW.getTime() + n * MS_PER_DAY);
 
@@ -279,6 +279,36 @@ describe("runTrialReminders", () => {
       expect(await runFiltered(day(5))).toEqual([]);
       expect(await runFiltered(day(6))).toEqual([{ shopId: shop.id, stage: 2, ownerEmail }]);
       expect(await runFiltered(day(7))).toEqual([{ shopId: shop.id, stage: 3, ownerEmail }]);
+      expect(mine().map((e) => e.subject).at(-1)).toContain("trial has ended");
+    });
+  });
+
+  describe("a shop on the standard trial, from the day it signs up", () => {
+    const signedUp = new Date(NOW.getTime() - 2 * 60 * 60 * 1000);
+    const newShop = () =>
+      makeShop({
+        createdAt: signedUp,
+        trialEndsAt: new Date(signedUp.getTime() + BILLING.trialDays * MS_PER_DAY),
+      });
+    const day = (n: number) => new Date(NOW.getTime() + n * MS_PER_DAY);
+
+    it("the standard trial is 14 days, and its first week is quiet", async () => {
+      expect(BILLING.trialDays).toBe(14);
+      await newShop();
+      for (const n of [0, 1, 2, 3, 4, 5, 6]) expect(await runFiltered(day(n))).toEqual([]);
+      expect(mine().length).toBe(0);
+    });
+
+    it("gets each email once: a week out, the day before, and the day it ends", async () => {
+      const shop = await newShop();
+      // The sweep 7 days on is 7 days and 2 hours after signup, with 6 days
+      // and 22 hours left.
+      expect(await runFiltered(day(7))).toEqual([{ shopId: shop.id, stage: 1, ownerEmail }]);
+      expect(mine()[0]!.subject).toContain("ends in 7 days");
+      for (const n of [8, 9, 10, 11, 12]) expect(await runFiltered(day(n))).toEqual([]);
+      expect(await runFiltered(day(13))).toEqual([{ shopId: shop.id, stage: 2, ownerEmail }]);
+      expect(await runFiltered(day(14))).toEqual([{ shopId: shop.id, stage: 3, ownerEmail }]);
+      expect(mine().length).toBe(3);
       expect(mine().map((e) => e.subject).at(-1)).toContain("trial has ended");
     });
   });
