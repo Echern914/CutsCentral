@@ -14,6 +14,7 @@ import {
   inviteMemberAction,
   removeMemberAction,
   revokeInviteAction,
+  setOwnerChairAction,
   teamAction,
   updateMemberAction,
 } from "./actions";
@@ -147,6 +148,10 @@ export function TeamClient({
   const freeStaff = data.staff.filter((s) => !linkedStaffIds.has(s.id));
   const staffName = (id: string | null) =>
     id ? (data.staff.find((s) => s.id === id)?.name ?? "—") : null;
+  // 🔴 The owner's own chair is only asked about once there IS a team. A
+  // one-person shop has nobody to tell apart from, so its Team page is exactly
+  // as it was: one row, no controls.
+  const hasTeam = data.members.length > 1 || data.invites.length > 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -296,6 +301,11 @@ export function TeamClient({
                       No {vocab.stationNoun} yet, so they have no day to see.
                     </p>
                   )}
+                  {isOwner && isTheOwner && hasTeam && !m.staffId && freeStaff.length > 0 && (
+                    <p className="mt-0.5 text-xs text-muted">
+                      Take {vocab.clientNounPlural} yourself? Pick your {vocab.stationNoun}.
+                    </p>
+                  )}
                   {/* Offers & codes on: which offers this seat may make, for
                       its own bookings (an unlinked seat has none). */}
                   {isOwner && !isTheOwner && m.role === "BARBER" && m.staffId && data.offerServices && (
@@ -311,6 +321,33 @@ export function TeamClient({
                     />
                   )}
                 </div>
+
+                {/* The owner's own row: which chair they work, and nothing
+                    else. Their role and access are not editable anywhere. */}
+                {isOwner && isTheOwner && hasTeam && (m.staffId || freeStaff.length > 0) && (
+                  <select
+                    value={m.staffId ?? ""}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      run(
+                        () => setOwnerChairAction(next || null),
+                        next ? `That's your ${vocab.stationNoun} now` : `You're not on a ${vocab.stationNoun}`,
+                      );
+                    }}
+                    disabled={pending}
+                    data-qa="owner-chair"
+                    aria-label={`Your own ${vocab.stationNoun}`}
+                    className="min-h-[44px] max-w-[13rem] truncate rounded-lg border border-subtle bg-charcoal-700 px-3 py-1 text-xs text-offwhite"
+                  >
+                    <option value="">I don&apos;t take {vocab.clientNounPlural}</option>
+                    {m.staffId && <option value={m.staffId}>{staffName(m.staffId)}</option>}
+                    {freeStaff.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
 
                 {isOwner && !isTheOwner && (
                   <div className="flex flex-wrap items-center gap-2">
@@ -335,7 +372,7 @@ export function TeamClient({
                       disabled={pending}
                       data-qa="member-chair"
                       aria-label={`${cap(vocab.stationNoun)} for ${m.user.name}`}
-                      className="max-w-[11rem] truncate rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+                      className="min-h-[44px] max-w-[11rem] truncate rounded-lg border border-subtle bg-charcoal-700 px-3 py-1 text-xs text-offwhite"
                     >
                       <option value="">No {vocab.stationNoun}</option>
                       {m.staffId && (
@@ -363,7 +400,7 @@ export function TeamClient({
                       }
                       disabled={pending}
                       aria-label={`Role for ${m.user.name}`}
-                      className="rounded-lg border border-subtle bg-charcoal-700 px-2 py-1 text-xs text-offwhite"
+                      className="min-h-[44px] rounded-lg border border-subtle bg-charcoal-700 px-3 py-1 text-xs text-offwhite"
                     >
                       <option value="BARBER">{cap(vocab.providerNoun)}</option>
                       <option value="MANAGER">Manager</option>

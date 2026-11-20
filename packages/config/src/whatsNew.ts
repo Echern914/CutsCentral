@@ -36,6 +36,36 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-20-calendar-shows-who-each-booking-is-with",
+    date: "2026-11-20",
+    kind: "feature",
+    title: "See who each booking is with on your calendar",
+    body:
+      "With more than one person at your shop, each booking on your calendar and your Today list now names who " +
+      "it is with. Tap a name above the calendar to see just that person's day, week or month. Tap Everyone to " +
+      "go back.",
+  },
+  {
+    id: "2026-11-20-owner-marks-own-spot-on-the-team",
+    date: "2026-11-20",
+    kind: "feature",
+    title: "Owners can mark which spot on the team is theirs",
+    body:
+      "Take clients yourself? On Team, pick which person on your booking page is you. Your own bookings then " +
+      "count as yours, so you get one alert for them and your quick walk-ins land with you. What you can see " +
+      "and do stays the same.",
+  },
+  {
+    id: "2026-11-20-owner-hears-about-every-booking",
+    date: "2026-11-20",
+    kind: "feature",
+    title: "Owners hear about every booking in the shop",
+    body:
+      "When someone on your team had their own login, their bookings alerted only them. You now get a copy when " +
+      "a client books, moves or cancels with anyone, and requests always reach you. To stop the copies, open " +
+      "Account, then Notifications.",
+  },
+  {
     id: "2026-11-19-clients-pick-who-they-book-with",
     date: "2026-11-19",
     kind: "feature",

@@ -10,6 +10,7 @@ import {
   appointmentDeepLink,
   MAX_NEXT_UP_LEAD_MIN,
   MAX_TRAVEL_BUFFER_MIN,
+  recipientForAppointment,
   resolveNotifyPrefs,
   sendToBarber,
   type NotifyPrefs,
@@ -199,7 +200,10 @@ async function runNextUp(shopId: string, ownerId: string, now: Date): Promise<nu
   let sent = 0;
 
   for (const a of rows) {
-    const userId = a.staff.userId ?? ownerId;
+    // The person at the chair and nobody else: "your next client is due" is
+    // no use to an owner who is not the one working it (the "chair" audience
+    // in services/barberNotify.ts).
+    const userId = recipientForAppointment(a, ownerId);
     let prefs = prefsCache.get(userId);
     if (!prefs) {
       prefs = await resolveNotifyPrefs(shopId, userId);
@@ -343,6 +347,11 @@ async function runDayAhead(shopId: string, ownerId: string, now: Date): Promise<
     if (localHour !== prefs.dayAheadHour) continue;
 
     const staffIds = staffRows.filter((s) => s.userId === userId).map((s) => s.id);
+    // Chairs somebody else's login works. The owner's "other chairs" switch
+    // is about exactly these and nothing else.
+    const otherLoginStaffIds = staffRows
+      .filter((s) => s.userId !== null && s.userId !== ownerId)
+      .map((s) => s.id);
     const rows = (await runWithShop(shopId, (tx) =>
       tx.appointment.findMany({
         where: {
@@ -356,7 +365,19 @@ async function runDayAhead(shopId: string, ownerId: string, now: Date): Promise<
           startsAt: { gte: startOfTomorrowUtc, lt: endOfTomorrowUtc },
           // A barber sees his own chair; the owner sees the whole shop (which
           // is also what a solo barber wants).
-          ...(userId === ownerId && staffIds.length === 0 ? {} : { staffId: { in: staffIds } }),
+          //
+          // 🔴 AN OWNER WHO ALSO WORKS A CHAIR STILL GETS THE SHOP. The owner
+          // can now be linked to a chair of his own, and "has a chair" used to
+          // be read as "is a barber": the moment he linked himself, his digest
+          // for tomorrow would have shrunk to his own bookings. It narrows
+          // only when he has said he does not want news of other chairs, and
+          // then it drops exactly those: chairs another login works. A chair
+          // with no login stays, because its alerts are the owner's anyway.
+          ...(userId !== ownerId
+            ? { staffId: { in: staffIds } }
+            : prefs.otherChairsEnabled || otherLoginStaffIds.length === 0
+              ? {}
+              : { staffId: { notIn: otherLoginStaffIds } }),
         },
         orderBy: { startsAt: "asc" },
         take: 100,

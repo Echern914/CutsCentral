@@ -348,6 +348,86 @@ describe("barber day-ahead digest", () => {
     await runAtHour(20);
     expect(sent.filter((s) => s.kind === "dayAhead" && s.userId === ownerId)).toHaveLength(0);
   });
+
+  /**
+   * WHOSE TOMORROW THE OWNER IS TOLD ABOUT.
+   *
+   * In this fixture the owner works "Owner Chair" and another login works
+   * "Other Chair". Each case runs on its OWN calendar day: the digest is
+   * claimed once per (shop, person, date), so two cases sharing a date would
+   * have the second one find the claim taken and pass by sending nothing.
+   */
+  async function ownerDigestOn(day: string, ownerPrefs: Record<string, unknown>) {
+    await prisma.barberNotifyPref.create({
+      data: { shopId, userId: ownerId, dayAheadHour: 19, nextUpEnabled: false, ...ownerPrefs },
+    });
+    // A third chair nobody has a login for: its alerts are the owner's.
+    const spare = await prisma.staff.create({
+      data: { shopId, name: "Spare Chair" },
+      select: { id: true },
+    });
+    const next = new Date(`${day}T00:00:00.000Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    const chairs: [string, string, number][] = [
+      [staffAId, "Mine", 9],
+      [staffBId, "Theirs", 11],
+      [spare.id, "Nobodys", 13],
+    ];
+    for (const [staffId, firstName, hour] of chairs) {
+      const startsAt = new Date(next);
+      startsAt.setUTCHours(hour, 0, 0, 0);
+      await prisma.appointment.create({
+        data: {
+          shopId,
+          staffId,
+          serviceId,
+          clientId,
+          firstName,
+          status: "BOOKED",
+          startsAt,
+          endsAt: new Date(startsAt.getTime() + 45 * 60_000),
+          manageToken: randomToken(),
+        },
+      });
+    }
+    try {
+      await run(new Date(`${day}T19:05:00.000Z`));
+      return sent.filter((s) => s.kind === "dayAhead" && s.userId === ownerId);
+    } finally {
+      await prisma.appointment.deleteMany({ where: { shopId } });
+      await prisma.staff.delete({ where: { id: spare.id } });
+    }
+  }
+
+  it("🔴 an owner who works a chair is still told about the WHOLE shop", async () => {
+    // "Has a chair" used to be read as "is a barber", which shrank a linked
+    // owner's rundown to his own bookings.
+    const digest = await ownerDigestOn("2026-07-06", {});
+    expect(digest).toHaveLength(1);
+    expect(digest[0]!.title).toBe("Tomorrow: 3 confirmed appointments");
+    expect(digest[0]!.body).toBe("9:00 AM to 1:00 PM. First up: Mine.");
+  });
+
+  it("with 'other chairs' off, it drops the chair another login works and keeps the rest", async () => {
+    const digest = await ownerDigestOn("2026-07-08", { otherChairsEnabled: false });
+    expect(digest).toHaveLength(1);
+    // His own chair and the chair with no login. Not the other barber's.
+    expect(digest[0]!.title).toBe("Tomorrow: 2 confirmed appointments");
+    expect(digest[0]!.body).toBe("9:00 AM to 1:00 PM. First up: Mine.");
+  });
+
+  it("the other barber's rundown is his own chair only, whatever HIS row says", async () => {
+    // The switch is the owner's. A barber's row holding `true` must not widen
+    // what he is told to the whole shop.
+    await prisma.barberNotifyPref.create({
+      data: { shopId, userId: otherUserId, dayAheadHour: 19, nextUpEnabled: false, otherChairsEnabled: true },
+    });
+    await ownerDigestOn("2026-07-10", { dayAheadEnabled: false });
+    const theirs = sent.filter((s) => s.kind === "dayAhead" && s.userId === otherUserId);
+    expect(theirs).toHaveLength(1);
+    expect(theirs[0]!.title).toBe("Tomorrow: 1 confirmed appointment");
+    expect(theirs[0]!.body).toBe("11:00 AM. First up: Theirs.");
+  });
 });
 
 /**

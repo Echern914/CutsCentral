@@ -37,6 +37,26 @@ export interface ShopAccess {
 }
 
 /**
+ * The chair the OWNER works themselves, when they have said which one
+ * (PUT /api/team/owner/staff). Null for an owner who takes no clients, and
+ * for every owner who has never set it.
+ *
+ * 🔴 THIS READS THE OWNER'S SEAT FOR ONE THING ONLY: the chair id. Access and
+ * role were already answered from `Shop.ownerId` before this is called, and
+ * nothing here can change either - a missing, stale or wrong seat row costs
+ * the owner a default chair and nothing else. It used to be hard-coded null,
+ * which is why an owner who cuts hair was the one person in the shop the
+ * product could not tell which chair was theirs.
+ */
+async function ownerChairId(userId: string, shopId: string): Promise<string | null> {
+  const seat = await prisma.shopMember.findUnique({
+    where: { shopId_userId: { shopId, userId } },
+    select: { staffId: true },
+  });
+  return seat?.staffId ?? null;
+}
+
+/**
  * Can this user act in THIS shop, and as what? Null when they can't.
  *
  * OWNERSHIP FIRST - `Shop.ownerId` is the source of truth, so an owner's access
@@ -47,7 +67,7 @@ export async function accessToShop(
   shopId: string,
 ): Promise<ShopAccess | null> {
   const owned = await prisma.shop.findFirst({ where: { id: shopId, ownerId: userId } });
-  if (owned) return { shop: owned, role: "OWNER", staffId: null };
+  if (owned) return { shop: owned, role: "OWNER", staffId: await ownerChairId(userId, owned.id) };
   const seat = await prisma.shopMember.findFirst({
     where: { userId, shopId },
     include: { shop: true },
@@ -74,8 +94,9 @@ export async function accessToShop(
  * request, and the switcher itself, landed them back in their own shop.
  *
  * With no usable hint: the person's own oldest shop, then their oldest seat.
- * A seat is still never consulted while ownership answers, which is what keeps
- * adding team seats safe for every shop that already exists.
+ * A seat is still never consulted for ACCESS or ROLE while ownership answers,
+ * which is what keeps adding team seats safe for every shop that already
+ * exists. (The owner's own seat is read for its chair id alone: ownerChairId.)
  */
 export async function resolveShopAccess(
   userId: string,
@@ -87,7 +108,7 @@ export async function resolveShopAccess(
   }
 
   const owned = await resolveOwnedShop(userId);
-  if (owned) return { shop: owned, role: "OWNER", staffId: null };
+  if (owned) return { shop: owned, role: "OWNER", staffId: await ownerChairId(userId, owned.id) };
 
   const seat = await prisma.shopMember.findFirst({
     where: { userId },

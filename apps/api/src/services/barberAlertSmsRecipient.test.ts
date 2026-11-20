@@ -18,6 +18,9 @@ import { sendToBarber } from "./barberNotify.js";
  *
  *     to = BarberNotifyPref.notifyPhone || Shop.notifyPhone
  *
+ * ...and the second link is the OWNER'S alone. Anybody else with a login is
+ * texted on their own number or not at all.
+ *
  * A wrong answer here is not cosmetic. It is what you consult before pointing
  * anything at production - "the owner will get a text anyway" is how a
  * verification run texts a real person, and how an operator assumes an alert
@@ -134,6 +137,33 @@ describe("the SMS recipient chain is exactly two links", () => {
     });
     await alert();
     expect(sent.map((s) => s.to)).toEqual(["+15551230001"]);
+  });
+
+  it("🔴 the shop line is the OWNER'S fallback only: another login never borrows it", async () => {
+    // A barber with a login and no number of his own used to be texted on the
+    // shop line - the owner's phone - for every booking on that barber's
+    // chair, with no switch of the owner's that could stop it. The owner now
+    // gets his own copy of the event instead (services/chairAlerts.test.ts).
+    const barber = await prisma.user.create({
+      data: { email: `smsrecip-b-${randomToken(6)}@test.local`, passwordHash: "x", name: "B" },
+      select: { id: true },
+    });
+    try {
+      await prisma.shop.update({ where: { id: shopId }, data: { notifyPhone: "+15551230001" } });
+      const res = await sendToBarber({ shopId, userId: barber.id, kind: "conflict", message });
+      expect(sent).toHaveLength(0);
+      expect(res.texted).toBe(false);
+
+      // CONTROL: with a number of his own he IS texted, there.
+      await prisma.barberNotifyPref.create({
+        data: { userId: barber.id, shopId, notifyPhone: "+15559990003" },
+      });
+      await sendToBarber({ shopId, userId: barber.id, kind: "conflict", message });
+      expect(sent.map((s) => s.to)).toEqual(["+15559990003"]);
+    } finally {
+      await prisma.barberNotifyPref.deleteMany({ where: { userId: barber.id } });
+      await prisma.user.delete({ where: { id: barber.id } });
+    }
   });
 
   it("smsEnabled off silences it even with a number", async () => {

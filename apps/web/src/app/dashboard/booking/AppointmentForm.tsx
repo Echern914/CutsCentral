@@ -117,8 +117,15 @@ export function AppointmentForm({
   onCreated,
   toast,
   offersEnabled = false,
+  prefillStaffId = null,
 }: {
   staff: StaffRow[];
+  /**
+   * The calendar is showing one person, so a booking made from it starts on
+   * them. Only a starting point: the picker below still changes it, and a
+   * waitlist or Book again prefill (what the customer asked for) wins.
+   */
+  prefillStaffId?: string | null;
   services: ServiceRow[];
   /** The shop's add-ons, as the booking page loads them (inactive ones too). */
   addOns?: AddOnRow[];
@@ -172,7 +179,10 @@ export function AppointmentForm({
       (activeServices.length === 1 ? activeServices[0]!.id : null),
   );
   const [staffId, setStaffId] = useState<string | null>(
-    rebookStaffId ?? waitlist?.staffId ?? (activeStaff.length === 1 ? activeStaff[0]!.id : null),
+    rebookStaffId ??
+      waitlist?.staffId ??
+      (prefillStaffId && activeStaff.some((s) => s.id === prefillStaffId) ? prefillStaffId : null) ??
+      (activeStaff.length === 1 ? activeStaff[0]!.id : null),
   );
   // Book again starts with NO time: the next visit's day and time are picked,
   // never inherited from the old one or defaulted to an hour nobody chose.
@@ -1126,6 +1136,8 @@ export function AppointmentForm({
                   key={s.id}
                   type="button"
                   onClick={() => chooseStaff(s.id)}
+                  // Said, not only coloured: which one is picked.
+                  aria-pressed={staffId === s.id}
                   className={chip(staffId === s.id, "px-4")}
                 >
                   {s.name}

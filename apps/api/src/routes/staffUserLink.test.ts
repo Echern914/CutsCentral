@@ -452,16 +452,22 @@ describe("alerts reach the barber whose chair it is", () => {
     // and it would still leave the CUSTOMER confirmation in flight.
     await settleNotifications();
 
-    const push = pushes.find((p) => p.payload.title === "New booking");
+    const booked = pushes.filter((p) => p.payload.title === "New booking");
+    const push = booked.find((p) => p.endpoint === "https://push.test/barber-device");
+    // The chair's own person is told, on his own device and his own number:
+    // this is the assertion the original bug would fail.
     expect(push).toBeTruthy();
-    expect(push!.endpoint).toBe("https://push.test/barber-device");
     expect(push!.payload.body).toContain("Malik Okafor just booked Fade with Dre");
-
-    // The owner's device and the shop-wide number are NOT used: the chair has
-    // its own person now, and this is the assertion the bug would fail.
-    expect(pushes.map((p) => p.endpoint)).not.toContain("https://push.test/owner-device");
-    expect(sent.map((s) => s.to)).not.toContain(OWNER_PHONE);
     expect(sent.filter((s) => s.to === BARBER_PHONE)).toHaveLength(1);
+
+    // The owner gets a copy of his own (services/chairAlerts.ts) - one push
+    // and one text on the shop line, never the barber's copy borrowed twice.
+    // Linking a barber used to switch the owner's off entirely.
+    expect(booked.map((p) => p.endpoint).sort()).toEqual([
+      "https://push.test/barber-device",
+      "https://push.test/owner-device",
+    ]);
+    expect(sent.filter((s) => s.to === OWNER_PHONE)).toHaveLength(1);
   });
 
   it("a customer cancellation reaches the same barber", async () => {
@@ -478,10 +484,12 @@ describe("alerts reach the barber whose chair it is", () => {
     expect(res.status).toBe(200);
     await settleNotifications();
 
-    const push = pushes.find((p) => p.payload.body.includes("canceled"));
-    expect(push).toBeTruthy();
-    expect(push!.endpoint).toBe("https://push.test/barber-device");
-    expect(pushes.map((p) => p.endpoint)).not.toContain("https://push.test/owner-device");
+    // The barber, and the owner's own copy - once each.
+    const canceled = pushes.filter((p) => p.payload.body.includes("canceled"));
+    expect(canceled.map((p) => p.endpoint).sort()).toEqual([
+      "https://push.test/barber-device",
+      "https://push.test/owner-device",
+    ]);
   });
 
   it("falls back to the owner for a chair nobody holds", async () => {

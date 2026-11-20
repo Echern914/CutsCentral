@@ -1065,6 +1065,12 @@ model BarberNotifyPref {
   // out now drops push devices - so a barber can show the time and service
   // without the client's name. On by default, like the Next up push preview.
   lockScreenNames Boolean @default(true)
+  // OWNER ONLY: also tell the owner about bookings on chairs other people
+  // work. Read for Shop.ownerId and nobody else (alertRecipients in
+  // services/barberNotify.ts); a barber's row carries it and it means nothing.
+  // Never turns off what waits on the owner: requests, late-fee approvals and
+  // double-booking alerts reach the owner whatever this says.
+  otherChairsEnabled Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -15,7 +15,8 @@ import {
 } from "../messaging/templates.js";
 import { getMessageProvider, smsEnabled } from "../messaging/twilio.js";
 import { emailDispatchMode, emailEnabled, sendEmail } from "../messaging/email.js";
-import { appointmentDeepLink, resolveNotifyPrefs, sendToBarber } from "./barberNotify.js";
+import { appointmentDeepLink } from "./barberNotify.js";
+import { sendToChair } from "./chairAlerts.js";
 import { sendPushToClient, sendPushToUser } from "../messaging/push.js";
 import { inQuietHours } from "../engines/quietHours.js";
 import { hasActiveAccess } from "../billing/stripe.js";
@@ -1116,15 +1117,6 @@ async function notifyBarberBookingEventImpl(params: {
     if (!found) return;
     const { appt, special } = found;
 
-    // The barber whose chair it is, else the owner - and HIS preferences.
-    // A cancel and a new booking are separately switchable, so a barber who
-    // only wants to hear about cancellations gets exactly that.
-    const userId = appt.staff.userId ?? shop.ownerId;
-    const prefs = await resolveNotifyPrefs(shop.id, userId);
-    if (params.kind === "canceled" ? !prefs.cancelEnabled : !prefs.newBookingEnabled) {
-      return;
-    }
-
     // Booked into one of his specials: say so by the name, the same label the
     // calendar shows ("After hours", or "Special" for one inside his hours),
     // so he knows before he opens it.
@@ -1142,13 +1134,20 @@ async function notifyBarberBookingEventImpl(params: {
             ? `${who} moved their ${what} to ${when}`
             : `${who} canceled their ${what} - ${when}`;
 
-    // One delivery path for every barber alert (push + optional SMS/email,
-    // each honoring this barber's channel switches and his own notify number).
-    await sendToBarber({
+    // Who hears (alertRecipients, services/chairAlerts.ts): the barber whose
+    // chair it is, and the owner too when he asked to hear about other chairs.
+    // A REQUEST is different: only the owner's side can approve it, so the
+    // owner always gets it and the barber gets a copy.
+    //
+    // Each person's own switches decide their own copy: a cancel and a new
+    // booking are separately switchable, so a barber who only wants to hear
+    // about cancellations gets exactly that whatever the owner chose.
+    await sendToChair({
       shopId: shop.id,
-      userId,
+      ownerId: shop.ownerId,
+      chairUserId: appt.staff.userId,
+      audience: params.kind === "requested" ? "decider" : "chairAndOwner",
       kind: params.kind === "canceled" ? "cancel" : "newBooking",
-      prefs,
       message: {
         title: BARBER_EVENT_TITLE[params.kind],
         body,

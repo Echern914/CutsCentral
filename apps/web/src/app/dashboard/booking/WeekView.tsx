@@ -5,6 +5,7 @@ import { cap, useVocab } from "@/components/VocabProvider";
 import { cn } from "@/lib/cn";
 import { fmtDuration } from "@/lib/duration";
 import { appointmentStatusPill, initialsOf } from "../_components/appointmentCardStyles";
+import { chairNameFor } from "../_components/chairView";
 import { Fact, type SheetView } from "./AppointmentSheet";
 import { dayTotals } from "./dayTotals";
 import type { AgendaRow, StaffRow } from "./page";
@@ -81,6 +82,7 @@ export function WeekView({
   timeFmt,
   minuteOf,
   staff,
+  chairs = [],
   isNative,
   onOpen,
   onOpenBlock,
@@ -99,6 +101,11 @@ export function WeekView({
   /** Shop wall-clock minute of the day (0-1439) of an instant. */
   minuteOf: (iso: string) => number;
   staff: StaffRow[];
+  /**
+   * The people to name on each booking: given only while the week shows more
+   * than one of them. Empty = a one-person shop, or a week filtered to one.
+   */
+  chairs?: StaffRow[];
   isNative: boolean;
   onOpen: (row: AgendaRow, view: SheetView) => void;
   onOpenBlock: (row: AgendaRow, dayKey: string) => void;
@@ -316,6 +323,7 @@ export function WeekView({
                         runningLate: row.runningLate,
                       });
                       const time = timeOf(row.start);
+                      const withWho = chairNameFor(row, chairs);
                       return (
                         <button
                           key={`${row.source}:${row.id}`}
@@ -323,7 +331,7 @@ export function WeekView({
                           onClick={() => pick(row)}
                           data-qa="week-event"
                           aria-pressed={isPicked}
-                          aria-label={[row.clientName, time, row.serviceName, pill.label].filter(Boolean).join(", ")}
+                          aria-label={[row.clientName, time, withWho, row.serviceName, pill.label].filter(Boolean).join(", ")}
                           className={cn(
                             "absolute z-10 overflow-hidden rounded-md border-l-[3px] px-2 py-0.5 text-left text-xs leading-4 transition-shadow hover:shadow-ambient",
                             toneOf(row, isPicked),
@@ -346,6 +354,10 @@ export function WeekView({
                           {height >= 36 && (
                             <span className={cn("block truncate tabular-nums", isPicked ? "opacity-80" : "text-muted")}>
                               {time}
+                              {/* Who it is with comes before the service: on a
+                                  shared week it is the first thing asked, and
+                                  this line truncates from the right. */}
+                              {withWho ? ` · ${withWho}` : ""}
                               {row.serviceName ? ` · ${row.serviceName}` : ""}
                             </span>
                           )}

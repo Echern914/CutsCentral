@@ -57,6 +57,16 @@ export async function createChairForMemberAction(id: string): Promise<TeamAction
   return res.ok ? { ok: true } : { ok: false, error: res.error };
 }
 
+/**
+ * The OWNER says which chair they work themselves (null = none). Its own
+ * route: it can set the chair on the owner's seat and nothing else.
+ */
+export async function setOwnerChairAction(staffId: string | null): Promise<TeamActionResult> {
+  const res = await apiSend<{ ok: boolean }>("PUT", "/api/team/owner/staff", { staffId });
+  revalidatePath("/dashboard/team");
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
+}
+
 export async function removeMemberAction(id: string): Promise<TeamActionResult> {
   const res = await apiSend<{ ok: boolean }>("DELETE", `/api/team/members/${id}`);
   revalidatePath("/dashboard/team");

@@ -16,9 +16,11 @@ import type { TeamData } from "./page";
 const updateMemberAction = vi.fn();
 const createChairForMemberAction = vi.fn();
 const teamAction = vi.fn();
+const setOwnerChairAction = vi.fn();
 const toast = vi.fn();
 
 vi.mock("./actions", () => ({
+  setOwnerChairAction: (...a: unknown[]) => setOwnerChairAction(...a),
   inviteMemberAction: vi.fn(),
   removeMemberAction: vi.fn(),
   revokeInviteAction: vi.fn(),
@@ -64,7 +66,86 @@ beforeEach(() => {
   updateMemberAction.mockReset();
   createChairForMemberAction.mockReset();
   teamAction.mockReset();
+  setOwnerChairAction.mockReset();
   toast.mockReset();
+});
+
+/**
+ * The owner's own chair. An owner who takes clients was the one person on the
+ * team with no chair to their name, so nothing could tell their bookings from
+ * anybody else's.
+ */
+describe("the owner's own chair", () => {
+  const ownerPicker = () =>
+    document.querySelector<HTMLSelectElement>('[data-qa="owner-chair"]');
+  const solo = () => team({ members: team().members.filter((m) => m.id === "sm_owner") });
+
+  it("🔴 a one-person shop is not asked: its Team page has no controls at all", () => {
+    render(<TeamClient initial={solo()} vocab={vocab} />);
+    expect(ownerPicker()).toBeNull();
+    expect(document.querySelector("select[data-qa]")).toBeNull();
+    expect(screen.queryByText(/Pick your chair/)).toBeNull();
+  });
+
+  it("with a team, the owner is asked which chair is theirs", () => {
+    render(<TeamClient initial={team()} vocab={vocab} />);
+    expect(screen.getByText("Take clients yourself? Pick your chair.")).toBeTruthy();
+    expect([...ownerPicker()!.options].map((o) => o.textContent)).toEqual([
+      "I don't take clients",
+      "Chair 3",
+    ]);
+    // Still exactly one MEMBER picker: the owner's is a different control,
+    // with no role and no Remove beside it.
+    expect(document.querySelectorAll('[data-qa="member-chair"]')).toHaveLength(1);
+    expect(screen.queryByLabelText("Role for Snow")).toBeNull();
+  });
+
+  it("🔴 picking one goes through the owner's own route, never the member one", async () => {
+    setOwnerChairAction.mockResolvedValue({ ok: true });
+    teamAction.mockResolvedValue(
+      team({
+        members: team().members.map((m) => (m.id === "sm_owner" ? { ...m, staffId: "st_free" } : m)),
+      }),
+    );
+    render(<TeamClient initial={team()} vocab={vocab} />);
+    fireEvent.change(ownerPicker()!, { target: { value: "st_free" } });
+    await waitFor(() => expect(setOwnerChairAction).toHaveBeenCalledWith("st_free"));
+    expect(updateMemberAction).not.toHaveBeenCalled();
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("That's your chair now", "success"));
+    // Linked: the nudge goes, and the chair shows as theirs.
+    await waitFor(() => expect(screen.queryByText(/Pick your chair/)).toBeNull());
+    expect(ownerPicker()!.value).toBe("st_free");
+  });
+
+  it("stepping off the chair sends null", async () => {
+    setOwnerChairAction.mockResolvedValue({ ok: true });
+    teamAction.mockResolvedValue(team());
+    const linked = team({
+      members: team().members.map((m) => (m.id === "sm_owner" ? { ...m, staffId: "st_me" } : m)),
+      staff: [
+        { id: "st_me", name: "Snow's chair" },
+        { id: "st_free", name: "Chair 3" },
+      ],
+    });
+    render(<TeamClient initial={linked} vocab={vocab} />);
+    expect(ownerPicker()!.value).toBe("st_me");
+    fireEvent.change(ownerPicker()!, { target: { value: "" } });
+    await waitFor(() => expect(setOwnerChairAction).toHaveBeenCalledWith(null));
+  });
+
+  it("a chair somebody else took meanwhile is explained", async () => {
+    setOwnerChairAction.mockResolvedValue({ ok: false, error: "staff_taken" });
+    render(<TeamClient initial={team()} vocab={vocab} />);
+    fireEvent.change(ownerPicker()!, { target: { value: "st_free" } });
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith("That chair is already linked to someone else.", "error"),
+    );
+  });
+
+  it("a manager is not offered it", () => {
+    render(<TeamClient initial={team({ role: "MANAGER" })} vocab={vocab} />);
+    expect(ownerPicker()).toBeNull();
+  });
 });
 
 describe("the member chair picker", () => {

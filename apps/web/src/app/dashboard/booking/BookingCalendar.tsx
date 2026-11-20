@@ -82,6 +82,8 @@ import { AppointmentSheet, type SheetView } from "./AppointmentSheet";
 import { WeekView } from "./WeekView";
 import { weekRangeLabel } from "./weekLayout";
 import { SpecialChip } from "../_components/SpecialChip";
+import { chairNameFor, onChair, tellableChairs } from "../_components/chairView";
+import { ChairFilter } from "./ChairFilter";
 import { BlockOffForm } from "./BlockOffForm";
 import { BlockEditSheet, BlockMenu } from "./BlockEditSheet";
 import { spreadAcrossDays } from "./blockDays";
@@ -292,6 +294,17 @@ export function BookingCalendar({
   // Whether `addAt` is an hour he TAPPED on the day (the time he means), or the
   // "+ New appointment" button's default start.
   const [addTapped, setAddTapped] = useState(false);
+  // ---- Whose calendar ----
+  // null = everyone. Held HERE, above the three views, so it survives paging
+  // days and switching Day / Week / Month: an owner looking at one person's
+  // week should not have to pick them again on every day. A one-person shop
+  // has nobody to tell apart (tellableChairs), so nothing below ever shows.
+  const [chairFilter, setChairFilter] = useState<string | null>(null);
+  const chairs = useMemo(() => tellableChairs(staff), [staff]);
+  // A filter naming someone who has since left falls back to everyone, rather
+  // than an empty calendar with no chip lit to explain it.
+  const chair = chairs.find((c) => c.id === chairFilter) ?? null;
+  const chairId = chair?.id ?? null;
   // "Book appointment" tapped on the waitlist board: the board dispatches the
   // entry, the calendar opens the SAME create form it uses everywhere else,
   // prefilled. Keeps one booking flow in the app rather than two.
@@ -391,7 +404,7 @@ export function BookingCalendar({
   // Bucket every loaded row by its shop-tz day. A block that runs past
   // midnight lands on EVERY day it covers, clipped to each (blockDays.ts) -
   // otherwise a multi-day block showed on its first day only.
-  const byDay = useMemo(() => {
+  const byDayAll = useMemo(() => {
     const map = new Map<string, AgendaRow[]>();
     for (const whole of agenda) {
       for (const row of spreadAcrossDays(whole, tz)) {
@@ -405,6 +418,31 @@ export function BookingCalendar({
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agenda, tz]);
+  // 🔴 ONE PLACE the filter is applied. Every view below reads `byDay`, so the
+  // month's counts, the week strip, the day's total and the planner all
+  // describe the same person. Filtering in one view only would leave a "12
+  // booked" heading over a list of four.
+  const byDay = useMemo(() => {
+    if (!chairId) return byDayAll;
+    const map = new Map<string, AgendaRow[]>();
+    for (const [key, list] of byDayAll) {
+      const kept = list.filter((r) => onChair(r, chairId));
+      if (kept.length > 0) map.set(key, kept);
+    }
+    return map;
+  }, [byDayAll, chairId]);
+  // The planner's own idea of who works here: one person while filtered, so
+  // its open time, its blocked hours and the walk-in bar are theirs alone.
+  const plannerStaff = useMemo(() => (chair ? [chair] : staff), [chair, staff]);
+  // The day's targets ("12 / 16 slots") are the whole shop's. Against one
+  // person's bookings they would read as that person falling short.
+  const plannerCategories = useMemo(
+    () => (chair ? categories.map((c) => ({ ...c, target: null })) : categories),
+    [chair, categories],
+  );
+  // Names go on the cards only while everyone is shown: filtered, every card
+  // is the same person and the chip above already says who.
+  const cardChairs = chair ? NO_CHAIRS : chairs;
 
   // ---- Visible month + selected day ----
   // A notification's link names the day to open on; otherwise today.
@@ -1054,6 +1092,8 @@ export function BookingCalendar({
         </button>
       </div>
 
+      <ChairFilter people={chairs} value={chairId} onChange={setChairFilter} />
+
       {view === "week" && weekFits === null ? (
         /* Not measured yet (the first frame after mount): hold the space
            rather than flash a day planner that then scrolls the page. */
@@ -1070,6 +1110,7 @@ export function BookingCalendar({
             return p.h * 60 + p.min;
           }}
           staff={staff}
+          chairs={cardChairs}
           isNative={isNative}
           onOpen={openFromWeek}
           onOpenBlock={openBlockFromWeek}
@@ -1121,7 +1162,8 @@ export function BookingCalendar({
             // Today button, the week strip, a swipe - opens at "now" again.
             isToday={shownDay === todayKey}
             rows={shownDayRows}
-            categories={categories}
+            categories={plannerCategories}
+            chairs={cardChairs}
             title={dayTitle}
             hourOf={(iso) => shopParts(iso).h}
             minuteOf={(iso) => {
@@ -1131,7 +1173,7 @@ export function BookingCalendar({
             timeFmt={timeFmt}
             toast={toast}
             isNative={isNative}
-            staff={staff}
+            staff={plannerStaff}
             onAddAt={(hour, tapped, minute) => {
               setAddAt(isoForDayHour(shownDay, hour, tz, minute));
               setAddTapped(tapped === true);
@@ -1280,7 +1322,8 @@ export function BookingCalendar({
               // that is closing above this one once its animation ends.
               scrollDelayMs={PLANNER_OPEN_MS + 100}
               rows={selectedRows}
-              categories={categories}
+              categories={plannerCategories}
+              chairs={cardChairs}
               title={
                 selectedRows[0]
                   ? dayTitleFmt.format(new Date(selectedRows[0].start))
@@ -1296,7 +1339,7 @@ export function BookingCalendar({
               timeFmt={timeFmt}
               toast={toast}
               isNative={isNative}
-              staff={staff}
+              staff={plannerStaff}
               onAddAt={(hour, tapped, minute) => {
                 setAddAt(isoForDayHour(selectedDay, hour, tz, minute));
                 setAddTapped(tapped === true);
@@ -1326,6 +1369,9 @@ export function BookingCalendar({
           timezone={tz}
           prefillISO={addAt}
           tapped={addTapped}
+          // Booking from one person's calendar books that person, unless the
+          // form is told otherwise.
+          prefillStaffId={chairId}
           onClose={() => setAddAt(null)}
           onCreated={() => {
             setAddAt(null);
@@ -1713,6 +1759,9 @@ function DayHeader({
     </div>
   );
 }
+
+/** One stable empty list, so "nobody to name" never re-renders a memo. */
+const NO_CHAIRS: StaffRow[] = [];
 
 function countByCategory(rows: AgendaRow[]): { all: number; byId: Map<string, number> } {
   const byId = new Map<string, number>();
@@ -2159,8 +2208,14 @@ function DayPlanner({
   scrollDelayMs = 0,
   banner,
   alsoHours = [],
+  chairs = NO_CHAIRS,
 }: {
   rows: AgendaRow[];
+  /**
+   * The people to name on each card: given only when the day shows more than
+   * one of them. Empty (a one-person shop, or a day filtered to one) = no names.
+   */
+  chairs?: StaffRow[];
   /** Gauge buckets (groups + ungrouped services) with their display-only targets. */
   categories: AgendaCategory[];
   title: string;
@@ -2612,6 +2667,7 @@ function DayPlanner({
                         toast={toast}
                         onChanged={onChanged}
                         canBookAgain={isNative}
+                        chairName={chairNameFor(r, chairs)}
                       />
                     ))}
                     {openAt !== null && (
@@ -2870,6 +2926,7 @@ export function AppointmentBlock({
   toast,
   onChanged,
   canBookAgain = false,
+  chairName = null,
 }: {
   row: AgendaRow;
   timeLabel: string;
@@ -2877,6 +2934,8 @@ export function AppointmentBlock({
   onChanged: () => void;
   /** Its sheet offers "Book again" (the calendar's form is there to answer). */
   canBookAgain?: boolean;
+  /** Who this booking is with, when the calendar shows more than one person. */
+  chairName?: string | null;
 }) {
   const vocab = useVocab();
   const [pending, start] = useTransition();
@@ -3312,6 +3371,17 @@ export function AppointmentBlock({
         className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted"
       >
         <span className="whitespace-nowrap tabular-nums text-offwhite/80">{timeLabel}</span>
+        {/* WHO IT IS WITH, on a calendar several people share. Straight after
+            the time, ahead of the service: "2:00 with Joe" is the question a
+            shared calendar gets asked. Never rendered for a one-person shop. */}
+        {chairName && (
+          <span
+            data-testid="chair-chip"
+            className="max-w-[9rem] shrink-0 truncate rounded-full bg-charcoal-700 px-2 py-0.5 text-[11px] font-medium text-offwhite/85"
+          >
+            {chairName}
+          </span>
+        )}
         {/* The dot travels WITH the service name: as separate wrap items, an
             expanded card (" · 30m · $35") left the dot alone on the time line. */}
         <span className="flex min-w-0 items-center gap-1.5">

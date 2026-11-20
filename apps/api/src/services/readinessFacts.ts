@@ -245,7 +245,8 @@ export async function collectReadinessFacts(
     tenant.members.filter((m) => m.staffId).map((m) => [m.staffId!, m.userId]),
   );
 
-  // Who each chair's alerts go to. Mirrors the ONE rule every send path uses:
+  // The person who WORKS each chair, for alerts. The owner may get a copy too
+  // (services/chairAlerts.ts decides that per event); this is the first recipient:
   // `staff.userId ?? shop.ownerId` (recipientForAppointment, barberNotify.ts).
   const staffFacts: StaffFacts[] = tenant.staff.map((s) => {
     const links = tenant.offerings.filter((o) => o.staffId === s.id);

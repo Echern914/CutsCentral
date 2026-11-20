@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/Card";
 import { resolveServiceColor } from "@chairback/config/serviceColor";
 import { NAME_WRAP_CLS, initialsOf } from "./appointmentCardStyles";
 import { SpecialChip } from "./SpecialChip";
+import { chairNameFor, tellableChairs, type ChairLike } from "./chairView";
 import { formatPrice } from "@/lib/serviceFields";
 import { durationLabel, planToday, startsIn, type ScheduleItem } from "./todayPlan";
 
@@ -82,11 +83,18 @@ export function TodayAgenda({
   rows,
   timezone,
   now = Date.now(),
+  staff = [],
 }: {
   rows: TodayRow[];
   timezone: string;
   now?: number;
+  /**
+   * Everyone who works here. With two or more active, each booking says who
+   * it is with; a one-person shop (or no list at all) reads exactly as before.
+   */
+  staff?: ChairLike[];
 }) {
+  const chairs = tellableChairs(staff);
   const timeFmt = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     hour: "numeric",
@@ -166,7 +174,12 @@ export function TodayAgenda({
             <div className="min-w-0 flex-1">
               <p className={`${NAME_WRAP_CLS} text-lg`}>{next.clientName}</p>
               <p className="text-sm text-muted [overflow-wrap:anywhere]">
-                {[next.serviceName, range(next), next.price !== null ? formatPrice(next.price) : null]
+                {[
+                  next.serviceName,
+                  chairNameFor(next, chairs),
+                  range(next),
+                  next.price !== null ? formatPrice(next.price) : null,
+                ]
                   .filter(Boolean)
                   .join(" · ")}
               </p>
@@ -222,14 +235,14 @@ export function TodayAgenda({
                   </summary>
                   <ul className="divide-y divide-subtle border-t border-subtle">
                     {plan.schedule.slice(0, plan.earlier).map((item) => (
-                      <ScheduleLine key={keyOf(item)} item={item} time={time} />
+                      <ScheduleLine key={keyOf(item)} item={item} time={time} people={chairs} />
                     ))}
                   </ul>
                 </details>
               </li>
             )}
             {plan.schedule.slice(plan.earlier).map((item) => (
-              <ScheduleLine key={keyOf(item)} item={item} time={time} />
+              <ScheduleLine key={keyOf(item)} item={item} time={time} people={chairs} />
             ))}
           </ul>
         )}
@@ -277,9 +290,12 @@ const STATUS_WORD: Partial<Record<TodayRow["status"], string>> = {
 function ScheduleLine({
   item,
   time,
+  people,
 }: {
   item: ScheduleItem;
   time: (iso: string | number) => string;
+  /** The people to name on a row; empty when there is nobody to tell apart. */
+  people: ChairLike[];
 }) {
   if (item.kind === "gap") {
     // A past gap, or the last few minutes of one, is history, not an invitation.
@@ -326,6 +342,7 @@ function ScheduleLine({
   const stripe = resolveServiceColor({ explicitKey: r.serviceColor, serviceName: r.serviceName }).hex;
   const closed = CLOSED.has(r.status);
   const word = STATUS_WORD[r.status];
+  const withWho = chairNameFor(r, people);
   return (
     <li style={{ opacity: closed ? 0.5 : undefined }}>
       <Link
@@ -350,6 +367,15 @@ function ScheduleLine({
             {r.special && <SpecialChip afterHours={r.afterHours} premium={r.premium} />}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+            {/* Who it is with, in a shop several people work. */}
+            {withWho && (
+              <span
+                data-testid="chair-chip"
+                className="max-w-[9rem] shrink-0 truncate rounded-full bg-charcoal-700 px-2 py-0.5 text-[11px] font-medium text-offwhite/85"
+              >
+                {withWho}
+              </span>
+            )}
             {r.serviceName && <span className="[overflow-wrap:anywhere]">{r.serviceName}</span>}
             {/* Add-on icons: the barber sees at a glance that this cut also
                 has a beard trim, a wash, etc. Title carries the real name for

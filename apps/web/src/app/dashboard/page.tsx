@@ -110,6 +110,7 @@ export default async function DashboardPage({
     sync,
     agenda,
     referrals,
+    team,
   ] = await Promise.all([
     apiGet<ShopMe>("/api/shops/me"),
     apiGet<Stats>("/api/dashboard/stats"),
@@ -125,6 +126,9 @@ export default async function DashboardPage({
     // wall-clock terms. This endpoint also MINTS the shop's referral code on
     // first read - idempotent, and a code every shop can share is the point.
     apiGet<ReferralSummary>("/api/dashboard/referrals"),
+    // Who works here, so Today can say who each booking is with once a shop
+    // has more than one person. A failed read just means no names.
+    apiGet<{ staff: { id: string; name: string; active: boolean }[] }>("/api/booking/staff"),
   ]);
   // Premium lock flags for SweepControl / WinbackPreview. Memoized: shares the
   // layout's /api/billing round-trip for this render (see lib/billing.ts).
@@ -204,7 +208,9 @@ export default async function DashboardPage({
       {/* Today's book, first thing on the page: opening the app should answer
           "who's coming in today?" before any of the analytics below. Rendered
           whenever the agenda call succeeded (an empty day says so itself). */}
-      {agenda.ok && <TodayAgenda rows={todayRows} timezone={agendaTz} />}
+      {agenda.ok && (
+        <TodayAgenda rows={todayRows} timezone={agendaTz} staff={team.data?.staff ?? []} />
+      )}
 
       {/* "How do I book you?" gets asked at the chair, so the answer belongs on
           the page the barber already has open - not three taps into Booking →

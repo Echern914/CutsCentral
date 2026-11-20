@@ -87,10 +87,13 @@ export function NotificationsCard({
   initial,
   devices: initialDevices,
   shopNotifyPhone,
+  otherChairsApplies = false,
 }: {
   initial: NotifyPrefs;
   devices: NotifyDevice[];
   shopNotifyPhone: string | null;
+  /** The owner of a shop where someone else has a login for their own chair. */
+  otherChairsApplies?: boolean;
 }) {
   const vocab = useVocab();
   const hasWidget = useAppHasNextUpWidget();
@@ -288,6 +291,25 @@ export function NotificationsCard({
               disabled={pending}
             />
           </Row>
+          {otherChairsApplies && (
+            // 🔴 THE OWNER'S SWITCH, and only where it can change something:
+            // the API says so (an owner with at least one chair another login
+            // works). It covers the everyday events only. A request to approve,
+            // a late fee waiting on a yes and a double-booked chair always
+            // reach the owner, and the hint says so, because a switch that
+            // looked like it muted those would be the dangerous reading.
+            <Row
+              title={`Other ${vocab.providerNounPlural}' bookings`}
+              hint={`Also tell me when someone books, moves or cancels with another ${vocab.providerNoun}. Off: you still hear about anything that needs your OK.`}
+            >
+              <Toggle
+                on={prefs.otherChairsEnabled}
+                onChange={(v) => save({ otherChairsEnabled: v })}
+                label={`Alerts for other ${vocab.providerNounPlural}`}
+                disabled={pending}
+              />
+            </Row>
+          )}
           {hasWidget && (
             // Only where the widget exists. Anyone holding the locked phone
             // can read it, so the name is the barber's call.
