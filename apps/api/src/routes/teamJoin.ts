@@ -5,6 +5,8 @@ import { prisma } from "@chairback/db";
 import { requireUser } from "../middleware/auth.js";
 import { accountLimiter } from "../middleware/rateLimit.js";
 import { applyChairLink } from "../services/staffUserLink.js";
+import { createChairForPerson } from "../services/memberChair.js";
+import { linkStaffToOfferedByAllServices } from "../services/offeredByAll.js";
 import { logger } from "../logger.js";
 
 /**
@@ -132,7 +134,8 @@ teamJoinRouter.post("/", accountLimiter, requireUser, async (req, res) => {
 
   const user = await prisma.user.findUnique({
     where: { id: req.userId! },
-    select: { id: true, email: true },
+    // name + avatarUrl: what a chair made for them is called and shown as.
+    select: { id: true, email: true, name: true, avatarUrl: true },
   });
   if (!user || user.email.toLowerCase() !== invite.email.toLowerCase()) {
     // The invite is real but belongs to someone else — say so plainly so the
@@ -153,6 +156,27 @@ teamJoinRouter.post("/", accountLimiter, requireUser, async (req, res) => {
     if (claimed) staffId = null;
   }
 
+  // 🔴 SOMEONE WHO TAKES APPOINTMENTS ALWAYS ENDS UP WITH A CHAIR. The invite
+  // said "your own chair", and a seat without one opened on a screen telling
+  // them to ask the owner to link it - which the owner then had to notice and
+  // do. So a BARBER seat that arrives with no chair (none was picked, or the
+  // one picked was claimed meanwhile) gets one made here, named after them.
+  // A MANAGER runs the shop and may not take appointments at all: no chair is
+  // made for them, and the owner can add one on the Team page.
+  const needsChair = invite.role === "BARBER" && !staffId;
+  // Shop is default-deny inside a tenant transaction and this is not one, but
+  // it is read up front anyway so the transaction below stays short. Only the
+  // fields the chair's fallback name is worded from.
+  const shopWords = needsChair
+    ? await prisma.shop.findUnique({
+        where: { id: invite.shopId },
+        select: { industry: true, serviceNoun: true, businessTypeSelectedAt: true },
+      })
+    : null;
+  // Held on an object: the transaction callback assigns it, and a plain let
+  // assigned inside a callback reads as never-assigned to the type checker.
+  const made: { chairId: string | null } = { chairId: null };
+
   try {
     await prisma.$transaction(async (tx) => {
       // Claim the invite atomically: only the racer that flips a still-pending
@@ -162,6 +186,18 @@ teamJoinRouter.post("/", accountLimiter, requireUser, async (req, res) => {
         data: { acceptedAt: new Date() },
       });
       if (claim.count === 0) throw new Error("invite_race");
+      // AFTER the claim, so the racer that lost it never makes a chair: a
+      // second tap leaves one seat and one chair, not a spare chair on the
+      // booking page that nobody works. Inside the transaction, so a seat that
+      // fails to be written takes its chair back with it.
+      if (needsChair) {
+        staffId = await createChairForPerson(tx, {
+          shopId: invite.shopId,
+          shop: shopWords ?? {},
+          person: user,
+        });
+        made.chairId = staffId;
+      }
       await tx.shopMember.create({
         data: {
           shopId: invite.shopId,
@@ -204,6 +240,16 @@ teamJoinRouter.post("/", accountLimiter, requireUser, async (req, res) => {
     logger.error({ err, shopId: invite.shopId }, "team join failed");
     res.status(503).json({ error: "join_failed" });
     return;
+  }
+  // After the commit, like Add staff: the chair is real without its services,
+  // it just isn't offered for "all" of them until this lands. A failure here
+  // must not turn a join that succeeded into an error - they are on the team.
+  if (made.chairId) {
+    try {
+      await linkStaffToOfferedByAllServices(invite.shopId, made.chairId);
+    } catch (err) {
+      logger.error({ err, shopId: invite.shopId }, "team join: offering the new chair for services failed");
+    }
   }
   res.status(201).json({ ok: true, shopId: invite.shopId });
 });

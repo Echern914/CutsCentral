@@ -20,6 +20,7 @@ import { TourReplayButton } from "./_components/TourReplayButton";
 import { SyncHealthBanner } from "./_components/SyncHealthBanner";
 import { HiddenPageBanner } from "./_components/HiddenPageBanner";
 import { SetupChecklist } from "./_components/SetupChecklist";
+import { HoursMissingNotice } from "./_components/HoursMissingNotice";
 import { getOnboardingState } from "@/app/onboarding/state";
 import { setupComplete } from "@chairback/config/onboarding";
 import { ConsentSetup } from "./_components/ConsentSetup";
@@ -209,6 +210,13 @@ export default async function DashboardPage({
           book. It replaced Getting Started, whose "connected" meant Acuity
           only and which never mentioned chairs, services or hours. */}
       {settingUp && setup && <SetupChecklist state={setup} />}
+      {/* Open for bookings, with someone still missing hours (a person who just
+          accepted an invitation, most often): named here, never a reason to
+          take the dashboard over again. Booking on ChairBack only - a shop that
+          books elsewhere keeps no hours here to be missing. */}
+      {!settingUp && setup && setup.facts.bookingMode === "native" && (
+        <HoursMissingNotice names={setup.staff.filter((s) => !s.hasHours).map((s) => s.name)} />
+      )}
 
       <ConsentSetup needConsentCount={sync.data?.clientsNeedingConsent ?? 0} />
 

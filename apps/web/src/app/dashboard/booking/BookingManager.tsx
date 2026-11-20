@@ -66,6 +66,7 @@ import { AcuityServiceImport } from "./AcuityServiceImport";
 import { PasteMenu } from "./PasteMenu";
 import { ShopTimezoneCard } from "./ShopTimezoneCard";
 import { Sheet } from "./AppointmentForm";
+import { StaffEditSheet } from "./StaffEditSheet";
 import { useJustSaved } from "./justSaved";
 import { TimeSelect } from "@/components/ui/TimeSelect";
 import { ImageField } from "../site/ImageField";
@@ -1140,6 +1141,8 @@ export function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast
   const [pending, start] = useTransition();
   // The staff member whose weekly-hours Sheet is open (null = closed).
   const [hoursFor, setHoursFor] = useState<StaffRow | null>(null);
+  // The staff member whose name and photo are being edited.
+  const [editing, setEditing] = useState<StaffRow | null>(null);
 
   // Return in the name box calls add() directly, past the disabled button, so
   // a second Return while the first add was in flight added the person twice.
@@ -1199,10 +1202,23 @@ export function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast
         {initial.filter((s) => s.active).map((s) => (
           <li
             key={s.id}
-            className="flex items-center justify-between rounded-xl border border-subtle px-4 py-2.5"
+            className="flex items-center justify-between gap-3 rounded-xl border border-subtle px-4 py-2.5"
           >
-            <span className="text-sm">{s.name}</span>
-            <div className="flex items-center gap-3">
+            <span className="flex min-w-0 items-center gap-2.5">
+              {s.imageUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={s.imageUrl} alt="" className="h-7 w-7 shrink-0 rounded-full object-cover" />
+              )}
+              <span className="min-w-0 truncate text-sm">{s.name}</span>
+            </span>
+            <div className="flex shrink-0 items-center gap-3">
+              <button
+                onClick={() => setEditing(s)}
+                aria-label={`Edit ${s.name}`}
+                className="rounded-md border border-subtle px-3 py-1 text-xs text-muted hover:text-offwhite"
+              >
+                Edit
+              </button>
               <button
                 onClick={() => setHoursFor(s)}
                 className="rounded-md border border-subtle px-3 py-1 text-xs text-muted hover:text-offwhite"
@@ -1228,8 +1244,22 @@ export function StaffTab({ initial, toast }: { initial: StaffRow[]; toast: Toast
           key={hoursFor.id}
           staffId={hoursFor.id}
           staffName={hoursFor.name}
+          // Everyone else here: a shop whose people keep the same week sets it
+          // once and copies it, instead of seven days per person.
+          copyFrom={initial.filter((x) => x.active && x.id !== hoursFor.id)}
           toast={toast}
           onClose={() => setHoursFor(null)}
+        />
+      )}
+      {editing && (
+        <StaffEditSheet
+          key={editing.id}
+          staff={editing}
+          onSaved={() => {
+            setEditing(null);
+            toast("Saved", "success");
+          }}
+          onClose={() => setEditing(null)}
         />
       )}
     </Card>
@@ -5112,15 +5142,55 @@ const timeSelectCls =
 // Hours persist only on "Save hours", so an unsaved close would silently lose
 // edits — the same "I filled it in, left, and it was gone" trap the old Hours
 // tab guarded. We diff against the loaded/saved snapshot and confirm on close.
+/** A saved week (hours + standing breaks) as the editor's seven rows. */
+function weekFromAvailability(data: {
+  rules: { weekday: number; startMin: number; endMin: number }[];
+  recurringBlocks: { weekday: number; startMin: number; endMin: number; reason?: string | null }[];
+}): HourRow[] {
+  const next: HourRow[] = WEEKDAYS.map(() => ({
+    on: false,
+    start: "09:00",
+    end: "17:00",
+    breaks: [],
+  }));
+  for (const rule of data.rules) {
+    next[rule.weekday] = {
+      ...next[rule.weekday]!,
+      on: true,
+      start: minToHHMM(rule.startMin),
+      end: minToHHMM(rule.endMin),
+    };
+  }
+  // Recurring breaks bucket onto their weekday (turn the day on too, so a
+  // break isn't stranded on an unchecked - and therefore closed - day).
+  for (const b of data.recurringBlocks) {
+    const row = next[b.weekday];
+    if (!row) continue;
+    row.on = true;
+    row.breaks.push({
+      start: minToHHMM(b.startMin),
+      end: minToHHMM(b.endMin),
+      reason: b.reason ?? "",
+    });
+  }
+  return next;
+}
+
 export function StaffHoursSheet({
   staffId,
   staffName,
+  copyFrom = [],
   toast,
   onClose,
   own,
 }: {
   staffId: string;
   staffName: string;
+  /**
+   * Other people whose week can be copied into this one. Empty (the default)
+   * shows no copy control - a one-person shop, or someone editing their own.
+   */
+  copyFrom?: { id: string; name: string }[];
   toast: Toast;
   onClose: () => void;
   /**
@@ -5198,6 +5268,40 @@ export function StaffHoursSheet({
     setPasteOutcome({ said, unread });
   }
 
+  // "Copy hours from" someone else here. Like the paste box it fills the rows
+  // and saves NOTHING: Save hours stays the only thing that saves.
+  const [copyOutcome, setCopyOutcome] = useState<string | null>(null);
+  const [copying, setCopying] = useState(false);
+  const copyBusy = useRef(false);
+  async function copyHoursFrom(donorId: string) {
+    const donor = copyFrom.find((p) => p.id === donorId);
+    if (!donor || copyBusy.current) return;
+    copyBusy.current = true;
+    setCopying(true);
+    setCopyOutcome(null);
+    try {
+      const r = await getAvailabilityAction(donor.id);
+      if (!r.ok || !r.data) {
+        setCopyOutcome(`Couldn't load ${donor.name}'s hours. Nothing here has changed.`);
+        return;
+      }
+      const week = weekFromAvailability(r.data);
+      if (!week.some((d) => d.on)) {
+        setCopyOutcome(`${donor.name} has no hours yet, so there is nothing to copy.`);
+        return;
+      }
+      setRows(week);
+      setCopyOutcome(
+        `Copied ${donor.name}'s hours and breaks. Nothing is saved yet: check the times below, then tap Save hours.`,
+      );
+    } catch {
+      setCopyOutcome(`Couldn't load ${donor.name}'s hours. Nothing here has changed.`);
+    } finally {
+      copyBusy.current = false;
+      setCopying(false);
+    }
+  }
+
   // Load this staff member's hours on mount (the Sheet only opens for one).
   useEffect(() => {
     setLoaded(false);
@@ -5208,32 +5312,7 @@ export function StaffHoursSheet({
         setLoadFailed(true);
         return;
       }
-      const next: HourRow[] = WEEKDAYS.map(() => ({
-        on: false,
-        start: "09:00",
-        end: "17:00",
-        breaks: [],
-      }));
-      for (const rule of r.data.rules) {
-        next[rule.weekday] = {
-          ...next[rule.weekday]!,
-          on: true,
-          start: minToHHMM(rule.startMin),
-          end: minToHHMM(rule.endMin),
-        };
-      }
-      // Recurring breaks bucket onto their weekday (turn the day on too, so a
-      // break isn't stranded on an unchecked - and therefore closed - day).
-      for (const b of r.data.recurringBlocks) {
-        const row = next[b.weekday];
-        if (!row) continue;
-        row.on = true;
-        row.breaks.push({
-          start: minToHHMM(b.startMin),
-          end: minToHHMM(b.endMin),
-          reason: b.reason ?? "",
-        });
-      }
+      const next = weekFromAvailability(r.data);
       setNoServiceDays(r.data.weekdaysWithNoService ?? []);
       setRows(next);
       setSavedSnapshot(JSON.stringify(next)); // this loaded state IS the baseline
@@ -5431,6 +5510,30 @@ export function StaffHoursSheet({
               </div>
             )}
           </div>
+
+          {copyFrom.length > 0 && (
+            <div className="mb-3 flex min-w-0 flex-col gap-1.5 rounded-lg border border-subtle p-2.5">
+              <select
+                value=""
+                disabled={copying}
+                onChange={(e) => void copyHoursFrom(e.target.value)}
+                aria-label="Copy hours from someone else"
+                className="h-11 w-full min-w-0 rounded-lg border border-subtle bg-charcoal-700 px-2.5 text-sm text-offwhite disabled:opacity-40"
+              >
+                <option value="">{copying ? "Copying…" : "Copy hours from…"}</option>
+                {copyFrom.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              {copyOutcome && (
+                <p role="status" className="min-w-0 text-[11px] leading-relaxed text-offwhite">
+                  {copyOutcome}
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="flex flex-col gap-3">
             {rows.map((r, i) => (

@@ -216,6 +216,13 @@ const ALLOWED: Exception[] = [
     why: "API route path for texting a client their rewards link.",
   },
   {
+    path: "apps/web/src/app/dashboard/_components/barberReportActions.ts",
+    lexeme: "barber",
+    snippet: "`/api/barber/report?period= `",
+    count: 1,
+    why: "API route path for a team member's own numbers.",
+  },
+  {
     path: "apps/web/src/app/dashboard/page.tsx",
     lexeme: "barber",
     snippet: "`/api/barber/home?from= &to= `",

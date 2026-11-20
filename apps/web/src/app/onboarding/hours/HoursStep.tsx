@@ -92,6 +92,8 @@ export function HoursStep({
         <StaffHoursSheet
           staffId={open.id}
           staffName={open.name}
+          // Set one week, then copy it to everyone who keeps the same one.
+          copyFrom={staff.filter((s) => s.hasHours && s.id !== open.id)}
           toast={toast}
           onClose={() => {
             setOpen(null);

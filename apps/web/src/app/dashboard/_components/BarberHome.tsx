@@ -16,6 +16,7 @@ import { BarberClients } from "./BarberClients";
 import { SpecialChip } from "./SpecialChip";
 import { BarberDay } from "./BarberDay";
 import type { OwnDay } from "./barberCalendarActions";
+import { MyNumbers } from "./MyNumbers";
 
 export interface BarberRow {
   id: string;
@@ -114,6 +115,10 @@ export function BarberHome({
             <Stat label="This week" value={data.counts.week} />
             <Stat label="Last 30 days" value={data.counts.month} />
           </div>
+
+          {/* Their own appointments, revenue and tips: the line the owner sees
+              beside their name on Insights. Self-loading, own chair only. */}
+          <MyNumbers />
 
           {/* The live walk-in line (claim / ready / start / complete on their
               own chair). Self-loading; renders NOTHING when Walk-In Mode is

@@ -1,14 +1,21 @@
 import { Router } from "express";
 import { z } from "zod";
-import { forShop, prisma } from "@chairback/db";
+import { forShop, prisma, runWithShop } from "@chairback/db";
 import { registerUserDevice } from "../services/userDevice.js";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireRole } from "../auth/roles.js";
 import { dayKeyIn, readChairDay } from "../services/chairDay.js";
-
 import { requireActiveAccess } from "../middleware/billing.js";
 import { noteForBarber } from "../engines/bookingIntake.js";
 import { shopDayKey } from "../services/barberNotify.js";
+import { readOwnChairNumbers } from "../engines/chairReport.js";
+import {
+  PERIODS,
+  PERIOD_KEYS,
+  resolveBucket,
+  resolvePeriod,
+  resolvePeriodWindow,
+} from "../engines/insightsWindow.js";
 /**
  * The barber-facing API: one chair, nothing else.
  *
@@ -128,6 +135,76 @@ barberRouter.get("/home", async (req, res) => {
     today,
     counts,
     reason: null,
+  });
+});
+
+/**
+ * GET /api/barber/report?period=7d|30d|90d|180d|365d - this seat's OWN numbers:
+ * appointments, what they brought in, and tips.
+ *
+ * The owner reads the same figures per person on Insights; this is one row of
+ * that, and only ever the caller's. 🔴 Whose row is decided by the session
+ * (`req.shopStaffId`) and nothing else: a staffId in the query is not read, so
+ * it cannot be changed to a colleague's. The response carries no shop total
+ * and no other person's row to compare against - "what did the shop make" is
+ * the owner's number, not an employee's.
+ *
+ * Same window rule and the same revenue rule as Insights
+ * (engines/chairReport.ts), so the number a team member sees here is the
+ * number the owner sees beside their name.
+ */
+barberRouter.get("/report", async (req, res) => {
+  const staffId = req.shopStaffId ?? null;
+  const periods = PERIOD_KEYS.map((k) => ({ key: k, label: PERIODS[k].label }));
+  if (!staffId) {
+    res.json({ chair: null, reason: "no_chair_linked", periods });
+    return;
+  }
+  // Shop has RLS with no policy: read as the owner, outside the shop scope.
+  const shop = await prisma.shop.findUnique({
+    where: { id: req.shop!.id },
+    select: { timezone: true, onlineTipsEnabled: true },
+  });
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const now = new Date();
+  const key = resolvePeriod(req.query.period);
+  const period = resolvePeriodWindow(now, shop.timezone, key, resolveBucket(key, undefined));
+  const { chair, mine } = await runWithShop(req.shop!.id, async (tx) => {
+    const chair = await tx.staff.findFirst({
+      where: { id: staffId, shopId: req.shop!.id },
+      select: { id: true, name: true },
+    });
+    if (!chair) return { chair: null, mine: null };
+    const mine = await readOwnChairNumbers(tx, {
+      shopId: req.shop!.id,
+      timezone: shop.timezone,
+      staffId: chair.id,
+      period,
+      now,
+    });
+    return { chair, mine };
+  });
+  if (!chair || !mine) {
+    res.json({ chair: null, reason: "no_chair_linked", periods });
+    return;
+  }
+  res.json({
+    chair: { id: chair.id, name: chair.name },
+    reason: null,
+    period: key,
+    periodLabel: period.label,
+    windowStart: period.windowStart.toISOString().slice(0, 10),
+    windowEnd: period.today.toISOString().slice(0, 10),
+    periods,
+    visits: mine.visits,
+    noShows: mine.noShows,
+    revenueCents: mine.revenueCents,
+    // Null rather than 0 where tips are not something this shop takes or has
+    // ever recorded for this person in the window.
+    tipsCents: shop.onlineTipsEnabled || mine.tipsCents > 0 ? mine.tipsCents : null,
   });
 });
 

@@ -43,6 +43,18 @@ async function createShop(cookie: string, name: string): Promise<string> {
 const withShop = (cookie: string, shopId: string) =>
   `${cookie}; ${ACTIVE_SHOP_COOKIE_NAME}=${shopId}`;
 
+/**
+ * Accepting a barber invitation now ends with a chair (full shop, 2026-11-20).
+ * The Team page's "give them a chair" step is still how a seat from before
+ * that, or one whose chair was removed, gets one; this puts a seat back in
+ * that state. Deleting the chair clears the seat's link (onDelete: SetNull).
+ */
+async function seatWithoutChair(userId: string) {
+  const seat = await prisma.shopMember.findFirstOrThrow({ where: { shopId: teamShopId, userId } });
+  if (seat.staffId) await prisma.staff.delete({ where: { id: seat.staffId } });
+  return seat.id;
+}
+
 const me = (cookie: string) => request(app).get("/api/auth/me").set("Cookie", cookie);
 
 const day = () => ({
@@ -146,7 +158,9 @@ describe("a barber who owns a shop and joins a team", () => {
     const home = await request(app).get("/api/barber/home").query(day()).set("Cookie", cookie);
     expect(home.status).toBe(200);
     expect(home.body.shop.name).toBe("United Barbershop");
-    expect(home.body.reason).toBe("no_chair_linked");
+    // Accepting with no chair picked gave Joe his own chair in the team.
+    expect(home.body.reason).toBeNull();
+    expect(home.body.chair).toMatchObject({ name: "Joe" });
     // Manager-only surfaces stay shut: they are a barber here.
     const roster = await request(app).get("/api/team").set("Cookie", cookie);
     expect(roster.status).toBe(403);
@@ -190,6 +204,7 @@ describe("the Team page can give a member a chair after they joined", () => {
   });
 
   it("🔴 one step: a new chair named after them, offered for 'all' services, linked to their seat", async () => {
+    await seatWithoutChair(barberUserId);
     const service = await prisma.service.create({
       data: { shopId: teamShopId, name: "Cut", durationMin: 30, offeredByAll: true },
       select: { id: true },
@@ -332,8 +347,8 @@ describe("🔴 a barber seat can't touch the shop itself", () => {
 describe("a new chair's public name", () => {
   it("🔴 is never an email address (accounts that stored one as their name)", async () => {
     await prisma.user.update({ where: { id: kimUserId }, data: { name: "kim.private@example.com" } });
-    const seat = await prisma.shopMember.findFirstOrThrow({ where: { shopId: teamShopId, userId: kimUserId } });
-    const res = await request(app).post(`/api/team/members/${seat.id}/staff`).set("Cookie", ownerCookie);
+    const seat = await seatWithoutChair(kimUserId);
+    const res = await request(app).post(`/api/team/members/${seat}/staff`).set("Cookie", ownerCookie);
     expect(res.status).toBe(201);
     const chair = await prisma.staff.findUniqueOrThrow({ where: { id: res.body.staffId } });
     expect(chair.name).not.toContain("@");

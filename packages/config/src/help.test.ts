@@ -800,3 +800,53 @@ describe("a targeted slot that won't publish", () => {
     expectAnswer("I added a time to my service but it is not popping up on my site", "slot-not-showing");
   });
 });
+
+/**
+ * A full shop (one business, several barbers), 2026-11-20: the employee
+ * questions used to land on the booth-renter answers, because those were the
+ * only team answers there were. Each phrase is asked the way an owner or one
+ * of their barbers would, and the canaries pin the routes these entries could
+ * steal.
+ */
+describe("findHelp - a shop with its own barbers", () => {
+  it("routes the owner's questions about their own staff", () => {
+    expectAnswer("what can a manager do", "staff-login-roles");
+    expectAnswer("what can my barber see", "staff-login-roles");
+    expectAnswer("difference between manager and barber login", "staff-login-roles");
+    expectAnswer("do i invite someone or send the team link", "employee-or-independent");
+    expectAnswer("which one do i use", "employee-or-independent");
+    expectAnswer("is my barber an employee or booth renter", "employee-or-independent");
+    expectAnswer("how much did my barber make", "per-barber-report");
+    expectAnswer("what did each barber make this month", "per-barber-report");
+    expectAnswer("compare my barbers", "per-barber-report");
+    expectAnswer("where do i see my own numbers", "per-barber-report");
+    expectAnswer("how do i work out payroll", "per-barber-report");
+    expectAnswer("can i copy hours to another barber", "set-hours");
+    expectAnswer("how do i rename a barber", "add-staff");
+    expectAnswer("how do i change a barber's name", "add-staff");
+  });
+
+  it("leaves the routes these could steal where they were", () => {
+    expectAnswer("how do i add a barber to my shop", "add-staff");
+    expectAnswer("how do i invite a team member", "team-logins");
+    expectAnswer("can my barbers have their own logins", "team-logins");
+    expectAnswer("how is my team doing", "team-overview");
+    expectAnswer("where are my team totals", "team-overview");
+    expectAnswer("how do i hide my numbers from the shop", "team-sharing");
+    expectAnswer("can i see when my barbers are working", "team-schedules");
+    expectAnswer("who is working today", "team-schedules");
+    expectAnswer("how do i set my hours", "set-hours");
+    expectAnswer("can a booth renter join my shop", "independent-team");
+    expectAnswer("do you take a commission", "commission");
+    expectAnswer("can clients leave a tip", "tips");
+  });
+
+  it("🔴 'each' is not a word about barbers: the plans question still offers the plans", () => {
+    // The report's wording once carried a bare "each", which pushed the
+    // pricing answer out of these suggestions.
+    const r = findHelp("What does each subscription include?");
+    const ids = [r.answer?.id, ...r.suggestions.map((s) => s.id)];
+    expect(ids).toContain("pricing");
+    expect(ids).not.toContain("per-barber-report");
+  });
+});

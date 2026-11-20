@@ -9,6 +9,8 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
  *  - Continue goes where the step's own data says is next;
  *  - nothing is asked twice: names already on a chair, services already on
  *    the menu, and the owner's own name from signup are all carried in;
+ *  - a shop adds its people with an optional email each, and is told about
+ *    any invitation that did not go out instead of being moved on past it;
  *  - the starter service list starts unticked - a template becomes a service
  *    only when the owner ticks it;
  *  - reaching the finish finishes setup, once.
@@ -24,7 +26,7 @@ const finishSetup = vi.hoisted(() => vi.fn());
 vi.mock("./stepActions", () => ({
   bookOnChairBackAction: bookOnChairBack,
   keepOwnLinkAction: keepOwnLink,
-  addTeamAction: addTeam,
+  addPeopleAction: addTeam,
   finishSetupAction: finishSetup,
   skipSetupAction: vi.fn(),
 }));
@@ -105,20 +107,106 @@ describe("how clients book", () => {
 });
 
 describe("who takes appointments", () => {
-  it("🔴 their own name from signup is filled in; Continue adds the names once and moves on", async () => {
-    addTeam.mockResolvedValue({ ok: true, created: 2, skipped: [] });
+  it("🔴 working alone: their own name from signup is filled in, and Continue adds it once", async () => {
+    addTeam.mockResolvedValue({ ok: true, created: 1, skipped: [], invites: [] });
     render(<TeamStep existing={[]} myName="Eric Chernichaw" next="/onboarding/services" />);
+    expect(screen.getByRole("button", { name: "Just me" }).getAttribute("aria-pressed")).toBe("true");
     expect((screen.getByLabelText("Name 1") as HTMLInputElement).value).toBe("Eric Chernichaw");
-    fireEvent.click(screen.getByRole("button", { name: "+ Add someone" }));
-    fireEvent.change(screen.getByLabelText("Name 2"), { target: { value: " Dee " } });
+    // One person: nothing to add, nobody to invite.
+    expect(screen.queryByRole("button", { name: "+ Add someone" })).toBeNull();
+    expect(screen.queryByLabelText(/^Email/)).toBeNull();
     const go = screen.getByRole("button", { name: "Continue" });
     await act(async () => {
       go.click();
       go.click();
     });
     expect(addTeam).toHaveBeenCalledTimes(1);
-    expect(addTeam).toHaveBeenCalledWith(["Eric Chernichaw", "Dee"]);
+    expect(addTeam).toHaveBeenCalledWith([{ name: "Eric Chernichaw" }]);
     expect(push).toHaveBeenCalledWith("/onboarding/services");
+  });
+
+  it("🔴 a team: each person by name, an email only for the ones typed, none asked for the owner", async () => {
+    addTeam.mockResolvedValue({
+      ok: true,
+      created: 3,
+      skipped: [],
+      invites: [{ name: "Dee", email: "dee@example.com", outcome: "sent" }],
+    });
+    render(<TeamStep existing={[]} myName="Eric" next="/onboarding/services" />);
+    fireEvent.click(screen.getByRole("button", { name: "I have a team" }));
+    // The owner is already signed in: their row has no email box.
+    expect(screen.queryByLabelText("Email 1, optional")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Name 2"), { target: { value: " Dee " } });
+    fireEvent.change(screen.getByLabelText("Email 2, optional"), { target: { value: " Dee@Example.com " } });
+    fireEvent.click(screen.getByRole("button", { name: "+ Add someone" }));
+    fireEvent.change(screen.getByLabelText("Name 3"), { target: { value: "Kai" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    });
+    expect(addTeam).toHaveBeenCalledWith([
+      { name: "Eric" },
+      { name: "Dee", email: "dee@example.com" },
+      { name: "Kai" },
+    ]);
+    expect(push).toHaveBeenCalledWith("/onboarding/services");
+  });
+
+  it("🔴 an invitation that did not go out is said, by name, before moving on", async () => {
+    addTeam.mockResolvedValue({
+      ok: true,
+      created: 2,
+      skipped: [],
+      invites: [
+        { name: "Dee", email: "dee@example.com", outcome: "email_failed" },
+        { name: "Kai", email: "kai@example.com", outcome: "sent" },
+      ],
+    });
+    render(<TeamStep existing={[]} myName="Eric" next="/onboarding/services" />);
+    fireEvent.click(screen.getByRole("button", { name: "I have a team" }));
+    fireEvent.change(screen.getByLabelText("Name 2"), { target: { value: "Dee" } });
+    fireEvent.change(screen.getByLabelText("Email 2, optional"), { target: { value: "dee@example.com" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    });
+    expect(push).not.toHaveBeenCalled();
+    const note = screen.getByTestId("invites-not-sent").textContent ?? "";
+    expect(note).toMatch(/Everyone is added and can be booked/);
+    expect(note).toMatch(/invitation to dee@example\.com didn't send/);
+    // The one that DID send is not listed as a problem.
+    expect(note).not.toMatch(/kai@example\.com/);
+    expect(screen.getByRole("link", { name: "Continue" }).getAttribute("href")).toBe("/onboarding/services");
+  });
+
+  it("a bad or shared email is caught before anything is sent", async () => {
+    render(<TeamStep existing={[]} myName="Eric" next="/x" />);
+    fireEvent.click(screen.getByRole("button", { name: "I have a team" }));
+    fireEvent.change(screen.getByLabelText("Name 2"), { target: { value: "Dee" } });
+    fireEvent.change(screen.getByLabelText("Email 2, optional"), { target: { value: "dee@" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    });
+    expect(screen.getByRole("alert").textContent).toMatch(/email for Dee doesn't look right/);
+    fireEvent.change(screen.getByLabelText("Email 2, optional"), { target: { value: "team@example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "+ Add someone" }));
+    fireEvent.change(screen.getByLabelText("Name 3"), { target: { value: "Kai" } });
+    fireEvent.change(screen.getByLabelText("Email 3, optional"), { target: { value: "TEAM@example.com" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    });
+    expect(screen.getByRole("alert").textContent).toMatch(/same email/);
+    expect(addTeam).not.toHaveBeenCalled();
+  });
+
+  it("back to 'Just me' sends only their own name, whatever was typed below", async () => {
+    addTeam.mockResolvedValue({ ok: true, created: 1, skipped: [], invites: [] });
+    render(<TeamStep existing={[]} myName="Eric" next="/x" />);
+    fireEvent.click(screen.getByRole("button", { name: "I have a team" }));
+    fireEvent.change(screen.getByLabelText("Name 2"), { target: { value: "Dee" } });
+    fireEvent.click(screen.getByRole("button", { name: "Just me" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    });
+    expect(addTeam).toHaveBeenCalledWith([{ name: "Eric" }]);
   });
 
   it("no one at all: asked for a name, nothing sent", async () => {
@@ -133,7 +221,11 @@ describe("who takes appointments", () => {
   it("people already added are shown, and Continue with no new names just moves on", async () => {
     render(<TeamStep existing={[{ id: "s1", name: "Eric" }]} myName="Eric" next="/onboarding/services" />);
     expect(screen.getByRole("list", { name: "Already added" }).textContent).toContain("Eric");
+    // Coming back: this is a team already, so the question isn't asked again,
+    // and anyone added now is someone else - with an email box.
+    expect(screen.queryByRole("button", { name: "Just me" })).toBeNull();
     expect((screen.getByLabelText("Name 2") as HTMLInputElement).value).toBe("");
+    expect(screen.getByLabelText("Email 2, optional")).toBeTruthy();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     });

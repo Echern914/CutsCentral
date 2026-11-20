@@ -49,6 +49,25 @@ export interface PeriodMeta {
   periods: { key: PeriodKey; label: string }[];
 }
 
+/** The totals, per person (GET /api/insights `byPerson`). Null for a one-person shop. */
+export interface ByPersonData {
+  rows: {
+    staffId: string;
+    name: string;
+    /** False for someone taken off the booking page who still worked in this window. */
+    active: boolean;
+    visits: number;
+    noShows: number;
+    revenueCents: number;
+    tipsCents: number;
+  }[];
+  /** Synced bookings, which record nobody against them. */
+  notAssigned: { visits: number; noShows: number; revenueCents: number } | null;
+  total: { visits: number; noShows: number; revenueCents: number; tipsCents: number };
+  /** Show tips: this shop takes them, or has recorded one in the window. */
+  tips: boolean;
+}
+
 export interface InsightsData extends PeriodMeta {
   /**
    * "peek" = the Starter sneak peek: totals only, `buckets`/`services` come
@@ -86,6 +105,8 @@ export interface InsightsData extends PeriodMeta {
     walkIns: number;
   };
   busiest: { weekday: string | null; counts: number[] };
+  /** Absent on an older payload. */
+  byPerson?: ByPersonData | null;
   loyalty: { punchesEarned: number; punchesRedeemed: number; redemptions: number };
   /**
    * What the barber entered as spent in this window (cents), expanded by

@@ -31,6 +31,7 @@ import {
 } from "../engines/insightsWindow.js";
 import { expenseSummaryForWindow } from "../engines/shopExpenses.js";
 import { readStats } from "../engines/insightsStats.js";
+import { buildChairReport, chairTally, happenedInWindow, readVisitTips } from "../engines/chairReport.js";
 import {
   STATS_GRAINS,
   STATS_GRAIN_KEYS,
@@ -141,9 +142,22 @@ insightsRouter.get("/", async (req, res) => {
   const windowFromKey = period.windowStart.toISOString().slice(0, 10);
   const windowToKey = period.today.toISOString().slice(0, 10);
 
-  const { events, ledgerAgg, redemptions, shopServices, firstVisits, firstAppts, expenses } =
+  const { events, ledgerAgg, redemptions, shopServices, firstVisits, firstAppts, expenses, people, tips } =
     await runWithShop(shop.id, async (tx) => {
       const { events } = await readChairEvents(shop.id, fetchFrom, fetchTo, { tx });
+      // Who takes appointments here, for the per-person split of the totals
+      // below. Tips are only read where there is more than one person to split
+      // them between: a one-person shop's page costs one small read more than
+      // it did, and shows exactly what it showed.
+      const people = await tx.staff.findMany({
+        where: { shopId: shop.id },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        select: { id: true, name: true, active: true },
+      });
+      const tips =
+        people.length > 1 && insightsScopeFor(shop) === "full"
+          ? await readVisitTips(tx, shop.id, fetchFrom, fetchTo)
+          : [];
       // What the shop SPENT in the same window, for the take-home estimate.
       const expenses = await expenseSummaryForWindow(tx, shop.id, windowFromKey, windowToKey);
       const ledgerAgg = await tx.punchLedger.aggregate({
@@ -214,7 +228,7 @@ insightsRouter.get("/", async (req, res) => {
               },
               _min: { startsAt: true },
             });
-      return { events, ledgerAgg, redemptions, shopServices, firstVisits, firstAppts, expenses };
+      return { events, ledgerAgg, redemptions, shopServices, firstVisits, firstAppts, expenses, people, tips };
     });
 
   const buckets = period.buckets.map((b) => ({
@@ -236,6 +250,9 @@ insightsRouter.get("/", async (req, res) => {
   let totalRevenue = 0;
   let inWindow = 0;
   let walkIns = 0; // counted as cuts, but not attributable to a client
+  // The same events, split by who took them. Fed from THIS loop, behind the
+  // same two checks as the totals, so its rows add up to them by construction.
+  const split = chairTally();
 
   for (const e of events) {
     // A booking in the future hasn't happened yet: it must not inflate "cuts",
@@ -246,6 +263,7 @@ insightsRouter.get("/", async (req, res) => {
     if (index < 0) continue; // fetch padding, not the window
 
     inWindow++;
+    split.add(e);
     // Revenue is money EARNED, never the ticket: real collected money net of
     // refunds where the shop takes payment in-app, the ticket where it doesn't,
     // and nothing at all for a no-show. See ChairEvent.earned.
@@ -360,11 +378,34 @@ insightsRouter.get("/", async (req, res) => {
   // the service breakdown, chair time, goals, the yearly report) is Premium.
   // The web reads `scope` and renders one locked panel where the cards went.
   const scope = insightsScopeFor(shop);
+
+  // The totals above, per person. Only where there is more than one row to
+  // compare - a one-person shop would be shown its own total twice. It follows
+  // the totals' plan rule (they are the same two headline numbers, split), but
+  // tips are not a headline number, so the peek carries none.
+  const counts = happenedInWindow(period, shop.timezone, now);
+  const report = buildChairReport({
+    staff: people,
+    tally: split,
+    tips: tips.filter((t) => counts(t.start)),
+  });
+  const byPerson =
+    report.rows.length > 1
+      ? {
+          rows: report.rows,
+          notAssigned: report.notAssigned,
+          total: report.total,
+          // A Tips column only where it can be a real number: a shop that has
+          // never offered tipping or recorded one would read as "nobody tips".
+          tips: scope === "full" && (shop.onlineTipsEnabled || report.total.tipsCents > 0),
+        }
+      : null;
   res.json({
     ...periodMeta(period),
     scope,
     buckets: scope === "full" ? buckets : [],
     services: scope === "full" ? services : [],
+    byPerson,
     totals: {
       visits: inWindow,
       revenue: Math.round(totalRevenue),

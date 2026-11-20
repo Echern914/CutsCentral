@@ -4,6 +4,7 @@ import { prisma } from "@chairback/db";
 import { randomToken } from "@chairback/config";
 import { nextOnboardingStep, type OnboardingFacts } from "@chairback/config/onboarding";
 import { createApp } from "../app.js";
+import { __setSendEmailForTests, emailEnabled } from "../messaging/email.js";
 import { raceBehindAdvisoryLock } from "../testing/raceBarrier.js";
 
 /**
@@ -12,6 +13,9 @@ import { raceBehindAdvisoryLock } from "../testing/raceBarrier.js";
  *  - a new shop starts unfinished; the state is read from its own data;
  *  - the team's chairs are added by name, never twice (a retry, a second
  *    tap, two at once), each offered the "everyone" services;
+ *  - a team is added with an optional email each: everyone is bookable
+ *    whether or not a single invitation goes out, and each invitation names
+ *    that person's own chair;
  *  - finishing (or skipping) stamps the shop and the tour, once;
  *  - the owner's alone.
  */
@@ -141,6 +145,130 @@ describe("walking the steps", () => {
     for (const names of [[], ["  "], ["x".repeat(61)], Array.from({ length: 21 }, (_, i) => `P${i}`)]) {
       expect((await team(owner.cookie, names)).status).toBe(400);
     }
+  });
+});
+
+describe("adding a team, with an email for anyone who should sign in", () => {
+  const people = (cookie: string, list: { name: string; email?: string }[]) =>
+    request(app).post("/api/onboarding/team").set("Cookie", cookie).send({ people: list });
+  const addr = (label: string) => `${label}-${randomToken(6)}@test.local`.toLowerCase();
+  const sent: { to: string; token: string | null }[] = [];
+  const capture = () =>
+    __setSendEmailForTests(async (input) => {
+      const m = /token=([^\s&]+)/.exec(input.text);
+      sent.push({ to: input.to, token: m ? decodeURIComponent(m[1]!) : null });
+      return { id: "TEST", status: "sent" as const };
+    });
+  afterAll(() => __setSendEmailForTests(undefined));
+
+  it("🔴 everyone is made bookable; an email sends that person an invitation naming THEIR chair", async () => {
+    capture();
+    const solo = await signup("onb-people", "Eric");
+    const id = await newShop(solo.cookie, "People Cuts");
+    const dee = addr("dee");
+    const res = await people(solo.cookie, [{ name: "Eric" }, { name: "Dee", email: dee.toUpperCase() }, { name: "Kai", email: "" }]);
+    expect(res.status).toBe(201);
+    expect(res.body.created.map((s: { name: string }) => s.name)).toEqual(["Eric", "Dee", "Kai"]);
+    expect(res.body.invites).toEqual([{ name: "Dee", email: dee, outcome: "sent" }]);
+
+    const deeChair = res.body.created.find((s: { name: string }) => s.name === "Dee").id as string;
+    const invites = await prisma.teamInvite.findMany({ where: { shopId: id }, select: { email: true, role: true, staffId: true } });
+    expect(invites).toEqual([{ email: dee, role: "BARBER", staffId: deeChair }]);
+    expect(sent.filter((m) => m.to === dee)).toHaveLength(1);
+
+    // Accepting lands them on the chair setup made for them - no second one.
+    emails.push(dee);
+    const join = await request(app).post("/api/auth/signup").send({ email: dee, password: "supersecret123", name: "Dee F", smsAttested: true, acceptTerms: true });
+    const cookie = (join.headers["set-cookie"] as unknown as string[])[0]!;
+    const token = sent.find((m) => m.to === dee)!.token!;
+    expect((await request(app).post("/api/team/join").set("Cookie", cookie).send({ token })).status).toBe(201);
+    const seat = await prisma.shopMember.findFirstOrThrow({ where: { shopId: id, role: "BARBER" }, select: { staffId: true, role: true } });
+    expect(seat).toEqual({ staffId: deeChair, role: "BARBER" });
+    expect(await prisma.staff.count({ where: { shopId: id } })).toBe(3);
+  });
+
+  it("🔴 email not set up on the server: everyone is still added, and nothing pretends to have been sent", async () => {
+    __setSendEmailForTests(undefined);
+    // Without the test sender this reads the environment. If it is ever on in
+    // a test run, stop here rather than send a real invitation.
+    expect(emailEnabled()).toBe(false);
+    const solo = await signup("onb-noemail", "Eric");
+    const id = await newShop(solo.cookie, "Quiet Cuts");
+    const dee = addr("dee");
+    const res = await people(solo.cookie, [{ name: "Eric" }, { name: "Dee", email: dee }]);
+    expect(res.status).toBe(201);
+    expect(res.body.created).toHaveLength(2);
+    expect(res.body.invites).toEqual([{ name: "Dee", email: dee, outcome: "email_unavailable" }]);
+    // No invitation was written: a link nobody was sent is not left lying around.
+    expect(await prisma.teamInvite.count({ where: { shopId: id } })).toBe(0);
+  });
+
+  it("a send that fails is reported, and the person is still added", async () => {
+    __setSendEmailForTests(async () => {
+      throw new Error("provider down");
+    });
+    const solo = await signup("onb-sendfail", "Eric");
+    const id = await newShop(solo.cookie, "Flaky Cuts");
+    const dee = addr("dee");
+    const res = await people(solo.cookie, [{ name: "Dee", email: dee }]);
+    expect(res.status).toBe(201);
+    expect(res.body.invites).toEqual([{ name: "Dee", email: dee, outcome: "email_failed" }]);
+    expect(await prisma.staff.count({ where: { shopId: id, name: "Dee" } })).toBe(1);
+  });
+
+  it("🔴 a retry adds no one twice, and leaves ONE live invitation for the same chair", async () => {
+    capture();
+    const solo = await signup("onb-retry", "Eric");
+    const id = await newShop(solo.cookie, "Retry Cuts");
+    const dee = addr("dee");
+    const first = await people(solo.cookie, [{ name: "Dee", email: dee }]);
+    const again = await people(solo.cookie, [{ name: "dee", email: dee }]);
+    expect(again.status).toBe(201);
+    expect(again.body.created).toEqual([]);
+    expect(again.body.skipped).toEqual(["dee"]);
+    expect(again.body.invites).toEqual([{ name: "dee", email: dee, outcome: "sent" }]);
+    expect(await prisma.staff.count({ where: { shopId: id } })).toBe(1);
+    const live = await prisma.teamInvite.findMany({ where: { shopId: id, acceptedAt: null, revokedAt: null }, select: { staffId: true } });
+    expect(live).toEqual([{ staffId: first.body.created[0].id }]);
+  });
+
+  it("the owner's own address, or someone already on the team, is added but not invited", async () => {
+    capture();
+    const solo = await signup("onb-self", "Eric");
+    const id = await newShop(solo.cookie, "Self Cuts");
+    const mine = (await prisma.user.findUniqueOrThrow({ where: { id: solo.userId }, select: { email: true } })).email;
+    const res = await people(solo.cookie, [{ name: "Eric", email: mine }]);
+    expect(res.status).toBe(201);
+    expect(res.body.invites).toEqual([{ name: "Eric", email: mine, outcome: "already_member" }]);
+    expect(await prisma.teamInvite.count({ where: { shopId: id } })).toBe(0);
+    expect(await prisma.staff.count({ where: { shopId: id, name: "Eric" } })).toBe(1);
+  });
+
+  it("someone whose chair another sign-in already holds is not sent a second way in", async () => {
+    capture();
+    const solo = await signup("onb-linked", "Eric");
+    const id = await newShop(solo.cookie, "Linked Cuts");
+    const made = await people(solo.cookie, [{ name: "Dee" }]);
+    const holder = await signup("onb-holder");
+    await prisma.shopMember.create({ data: { shopId: id, userId: holder.userId, role: "BARBER", staffId: made.body.created[0].id } });
+    const dee = addr("dee");
+    const res = await people(solo.cookie, [{ name: "Dee", email: dee }]);
+    expect(res.body.invites).toEqual([{ name: "Dee", email: dee, outcome: "already_linked" }]);
+    expect(await prisma.teamInvite.count({ where: { shopId: id } })).toBe(0);
+  });
+
+  it("refuses two people on one address, a bad address, or an unknown field - whole, adding no one", async () => {
+    const solo = await signup("onb-badpeople", "Eric");
+    const id = await newShop(solo.cookie, "Strict Cuts");
+    for (const list of [
+      [{ name: "Dee", email: "same@test.local" }, { name: "Kai", email: "SAME@test.local" }],
+      [{ name: "Dee", email: "not-an-email" }],
+      [{ name: "Dee", role: "MANAGER" }],
+      [{ name: "  " }],
+    ]) {
+      expect((await people(solo.cookie, list as { name: string; email?: string }[])).status).toBe(400);
+    }
+    expect(await prisma.staff.count({ where: { shopId: id } })).toBe(0);
   });
 });
 

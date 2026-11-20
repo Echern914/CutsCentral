@@ -39,6 +39,7 @@ vi.mock("./actions", () => ({
 // The employee home's self-loading sections are not what this file tests.
 vi.mock("../_components/BarberWalkIns", () => ({ BarberWalkIns: () => null }));
 vi.mock("../_components/BarberClients", () => ({ BarberClients: () => null }));
+vi.mock("../_components/MyNumbers", () => ({ MyNumbers: () => null }));
 
 const { AppointmentBlock } = await import("./BookingCalendar");
 const { AppointmentSheet } = await import("./AppointmentSheet");

@@ -35,7 +35,7 @@ const roleHint = (role: ShopRole, v: BusinessVocabulary): string =>
     ? "Full access, including billing and the team."
     : role === "MANAGER"
       ? "Runs the shop day to day. No billing or team changes."
-      : `Their own ${v.stationNoun}: they see their own day and their own clients, not the rest of the shop.`;
+      : `Their own ${v.stationNoun}: they see their own day, their own clients and their own numbers, not the rest of the shop.`;
 
 /** The chair picker's "make one" choice - never a real staff id. */
 const NEW_CHAIR = "__new__";
@@ -74,11 +74,20 @@ function explain(code: string | undefined, v: BusinessVocabulary): string {
 export function TeamClient({
   initial,
   vocab,
+  independentFirst = false,
   children,
 }: {
   initial: TeamData;
   vocab: BusinessVocabulary;
-  /** Rendered right under the page title - the independent-team card. */
+  /**
+   * Put the independent-team card ABOVE the staff logins. For a shop that
+   * already runs as a team of independent businesses and has no staff logins
+   * of its own, that card is the page. Everyone else gets staff logins first:
+   * the link under that card tells whoever follows it to start their OWN
+   * business, which is the wrong door for an employee.
+   */
+  independentFirst?: boolean;
+  /** The independent-team card. */
   children?: ReactNode;
 }) {
   const { toast } = useToast();
@@ -153,24 +162,54 @@ export function TeamClient({
   // as it was: one row, no controls.
   const hasTeam = data.members.length > 1 || data.invites.length > 0;
 
+  // The independent-team card, with the answer to "which of these do I use"
+  // directly above it. Two ways to add a person sat on this page with nothing
+  // saying which was which, and the wrong one sends an employee off to open a
+  // business of their own.
+  const independent = children ? (
+    <>
+      {isOwner && (
+        <section
+          aria-labelledby="which-one-title"
+          className="rounded-2xl border border-subtle px-5 py-4"
+          data-testid="which-one"
+        >
+          <h2 id="which-one-title" className="text-sm font-semibold text-offwhite">
+            Which one do I use?
+          </h2>
+          <p className="mt-1.5 text-sm text-muted">
+            <span className="text-offwhite">Someone you employ:</span> use &ldquo;Invite someone&rdquo;. They get a
+            staff login, and their bookings and {vocab.clientNounPlural} belong to your shop.
+          </p>
+          <p className="mt-1.5 text-sm text-muted">
+            <span className="text-offwhite">Someone who runs their own business from your shop:</span> send them the
+            team link under &ldquo;Independent {vocab.providerNounPlural}&rdquo;. Their {vocab.clientNounPlural},
+            bookings and money stay theirs.
+          </p>
+        </section>
+      )}
+      {children}
+    </>
+  ) : null;
+
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="font-display text-2xl">Team</h1>
         <p className="mt-1 text-sm text-muted">
-          Independent {vocab.providerNounPlural} link their own business to your team. Staff
-          logins let someone work inside yours.
+          Staff logins are for people who work in your shop. Independent{" "}
+          {vocab.providerNounPlural} who run their own business link to your team instead.
         </p>
       </div>
 
-      {children}
+      {independentFirst && independent}
 
       {/* Invite */}
       {isOwner && (
         <Card className="overflow-hidden">
           <CardHeader
             title="Invite someone"
-            subtitle="They get an email link. It works once, expires in 7 days, and only for that address."
+            subtitle="They get their own staff login by email. The link works once, expires in 7 days, and only for that address."
           />
           <div className="flex flex-col gap-3 px-5 py-5">
             {!data.inviteAvailable ? (
@@ -206,7 +245,11 @@ export function TeamClient({
                       aria-label={`Link to a ${vocab.stationNoun}`}
                       className="rounded-xl border border-subtle bg-charcoal-700 px-3 py-2 text-sm text-offwhite"
                     >
-                      <option value="">No {vocab.stationNoun}</option>
+                      {/* Nothing picked: someone who takes appointments gets
+                          one made when they accept; a manager gets none. */}
+                      <option value="">
+                        {role === "BARBER" ? `New ${vocab.stationNoun} for them` : `No ${vocab.stationNoun}`}
+                      </option>
                       {freeStaff.map((s) => (
                         <option key={s.id} value={s.id}>
                           {s.name}
@@ -430,10 +473,11 @@ export function TeamClient({
       </Card>
 
       <p className="text-[11px] text-muted/80">
-        Removing someone takes away their sign-in only. To stop a{" "}
-        {vocab.providerNoun} appearing on your booking page, deactivate their{" "}
-        {vocab.stationNoun} under Booking → Staff.
+        Removing someone takes away their staff login only. To stop a{" "}
+        {vocab.providerNoun} appearing on your booking page, remove them under Calendar → Staff.
       </p>
+
+      {!independentFirst && independent}
     </div>
   );
 }

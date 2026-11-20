@@ -16,6 +16,7 @@ import { YearlyReport } from "./YearlyReport";
 import { UpgradeCallout } from "../_components/UpgradeCallout";
 import { ExpensesCard, fmtCents } from "./ExpensesCard";
 import { StatsSection } from "./StatsSection";
+import { ByPersonCard } from "./ByPersonCard";
 import { GoalSuggestions } from "./GoalSuggestions";
 import type { StatsGrain } from "@chairback/config/insightsStats";
 import type {
@@ -319,6 +320,14 @@ export function InsightsClient({
               Your expenses
             </a>
           </p>
+        </motion.div>
+      )}
+
+      {/* The same totals, per person. Only sent where there is more than one
+          person, so a one-person shop's page is unchanged. */}
+      {data.byPerson && (
+        <motion.div variants={fadeUp}>
+          <ByPersonCard data={data.byPerson} pending={pending} />
         </motion.div>
       )}
 
