@@ -37,6 +37,22 @@ export async function openStripeDashboardAction(): Promise<{
 }
 
 /**
+ * The exact Stripe form for what an account set up through ChairBack (Express)
+ * still owes - a one-time Stripe-hosted link (account_onboarding) that lands
+ * back on /dashboard/payments. A linked Standard account is the barber's own
+ * login, which ChairBack cannot mint forms for: use openStripeDashboardAction.
+ */
+export async function finishStripeSetupAction(): Promise<{
+  ok: boolean;
+  url?: string;
+  error?: string;
+}> {
+  const res = await apiSend<{ url: string }>("POST", "/api/payments/connect/onboard");
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? "failed" };
+  return { ok: true, url: res.data.url };
+}
+
+/**
  * Unlink the Stripe account. For a STANDARD account this also revokes ChairBack
  * at Stripe, so it disappears from the barber's own connected-apps list rather
  * than only appearing to be gone here.
@@ -113,6 +129,21 @@ export async function savePayDirectAction(input: {
   return res.ok ? { ok: true } : { ok: false, error: res.error ?? "failed" };
 }
 
+/** What Stripe still wants from the shop's account (api billing/stripeHealth.ts). */
+export interface StripeHealth {
+  /** Plain-words list, overdue items first. */
+  needs: string[];
+  /** Something is already past Stripe's deadline. */
+  overdue: boolean;
+  /** Stripe's deadline for the current items, ISO. */
+  dueBy: string | null;
+  /** Stripe closed (rejected) the account. */
+  closed: boolean;
+  /** Stripe is checking something already sent. */
+  underReview: boolean;
+  disabledReason: string | null;
+}
+
 export interface PaymentStatus {
   connectAvailable: boolean;
   /** Whether the "link the Stripe account I already have" door can be offered. */
@@ -126,6 +157,11 @@ export interface PaymentStatus {
     chargesEnabled: boolean;
     payoutsEnabled: boolean;
     detailsSubmitted: boolean;
+    /**
+     * What Stripe still wants, in plain words (api billing/stripeHealth.ts).
+     * Optional = an older API.
+     */
+    health?: StripeHealth;
   };
   paymentsMode: "off" | "ahead" | "deposit" | "card_on_file" | "hold";
   /** Null until the shop picks one; the UI suggests $20. */

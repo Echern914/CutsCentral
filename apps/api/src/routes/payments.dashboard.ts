@@ -7,8 +7,10 @@ import {
   connectEnabled,
   createDashboardLink,
   createOnboardingLink,
+  emptyConnectStatus,
   getConnectStatus,
 } from "../billing/connect.js";
+import { stripeAlertFor } from "../billing/stripeHealth.js";
 import { standardConnectEnabled } from "../billing/connectOauth.js";
 import {
   createConnectionToken,
@@ -59,7 +61,7 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
   }
   const status = connectEnabled()
     ? await getConnectStatus({ id: req.shop!.id, stripeConnectAccountId: shop.stripeConnectAccountId })
-    : { connected: false, chargesEnabled: false, payoutsEnabled: false, detailsSubmitted: false };
+    : emptyConnectStatus(false);
   res.json({
     connectAvailable: connectEnabled(),
     // Whether the SECOND door (link an existing Stripe account) can be offered.
@@ -105,6 +107,56 @@ paymentsDashboardRouter.get("/status", async (req, res) => {
       cashApp: shop.payDirectCashApp,
       note: shop.payDirectNote,
     },
+  });
+});
+
+// GET /api/payments/stripe-alert - should the dashboard carry a Stripe banner?
+//
+// Reads the Shop's MIRRORED columns only (getConnectStatus and the
+// account.updated webhook keep them), never Stripe: this runs on every
+// dashboard page load. The one extra query - has this account ever taken a
+// card payment - runs only when the account is paused or closed, because that
+// is the only case it decides (billing/stripeHealth.ts stripeAlertFor).
+// Not gated on connectEnabled(): with Connect dark no shop has live flags to
+// warn about, and the answer is then simply null.
+paymentsDashboardRouter.get("/stripe-alert", async (req, res) => {
+  const shop = await prisma.shop.findUnique({
+    where: { id: req.shop!.id },
+    select: {
+      stripeConnectAccountId: true,
+      connectChargesEnabled: true,
+      payoutsEnabled: true,
+      connectRequirementsDue: true,
+      connectRequirementsDueBy: true,
+      connectDisabledReason: true,
+    },
+  });
+  if (!shop) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const accountId = shop.stripeConnectAccountId;
+  const paused = Boolean(accountId) && (!shop.connectChargesEnabled || Boolean(shop.connectDisabledReason?.startsWith("rejected")));
+  const hasTakenPayments = paused && accountId
+    ? (await prisma.payment.count({
+        where: {
+          shopId: req.shop!.id,
+          stripeConnectAccountId: accountId,
+          status: { in: ["succeeded", "partially_refunded", "refunded"] },
+        },
+        take: 1,
+      })) > 0
+    : false;
+  res.json({
+    alert: stripeAlertFor({
+      connected: Boolean(accountId),
+      chargesEnabled: shop.connectChargesEnabled,
+      payoutsEnabled: shop.payoutsEnabled,
+      requirementsDue: shop.connectRequirementsDue,
+      dueBy: shop.connectRequirementsDueBy,
+      disabledReason: shop.connectDisabledReason,
+      hasTakenPayments,
+    }),
   });
 });
 

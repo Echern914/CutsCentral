@@ -45,6 +45,7 @@ import { SeriesEditFields, SeriesEditFooter, useSeriesEdit } from "./SeriesEditV
 import { CheckoutRefund } from "./CheckoutRefund";
 import { DepositRefund } from "./DepositRefund";
 import { TipRefund } from "./TipRefund";
+import { openStripeDashboardAction } from "../payments/actions";
 import {
   cancelAppointmentAction,
   checkoutAppointmentAction,
@@ -2374,6 +2375,13 @@ function PaymentCard({
         </dl>
       )}
 
+      {/* WHERE THE MONEY WENT: the shop's own Stripe balance, never ChairBack.
+          Said here because a barber who charged a fee went looking for it and
+          could not tell whether it had landed anywhere (2026-11-19). */}
+      {!external && detail.inPayoutBalance && (
+        <MoneyInStripe payoutsPaused={detail.inPayoutBalance.payoutsPaused} />
+      )}
+
       {/* 🔴 THE CLIENT CANCELLED, AND THE FEE WAITS FOR A YES. Nothing was
           charged when they cancelled (Shop.cardFeeNeedsApproval): this is the
           question, with the figure and the card, and both answers. */}
@@ -4152,6 +4160,60 @@ function CardFeeLine({
   return (
     <div data-testid="card-fee-line">
       <Line label={label} value={value} tone={fee.state === "charged" ? "good" : fee.state === "pending" ? undefined : "bad"} />
+    </div>
+  );
+}
+
+/**
+ * "In your Stripe balance · See it", with the door to that balance. An
+ * account set up through ChairBack has no stripe.com login, so the link is
+ * minted (payments/actions openStripeDashboardAction). The outcome is said
+ * HERE, never in a toast: a toast under a dialog is invisible on a phone.
+ * A staff seat cannot open the shop's Stripe, so it is told who can.
+ */
+export function MoneyInStripe({ payoutsPaused }: { payoutsPaused: boolean }) {
+  // A plain busy flag, not a transition: it must hold a second tap in
+  // production React too, where an async transition's pending does not.
+  const [opening, setOpening] = useState(false);
+  const [failed, setFailed] = useState(false);
+  function open() {
+    if (opening) return;
+    setFailed(false);
+    setOpening(true);
+    void openStripeDashboardAction()
+      .catch(() => ({ ok: false, url: undefined }))
+      .then((r) => {
+        if (r.ok && r.url) {
+          window.location.href = r.url;
+          return;
+        }
+        setFailed(true);
+        setOpening(false);
+      });
+  }
+  return (
+    <div data-testid="money-in-stripe" className="mt-3 flex flex-col gap-1 border-t border-subtle pt-3 text-xs">
+      <p className="text-muted">
+        In your Stripe balance ·{" "}
+        <button
+          type="button"
+          onClick={open}
+          disabled={opening}
+          className="font-medium text-gold underline-offset-2 hover:underline disabled:opacity-60"
+        >
+          {opening ? "Opening…" : "See it"}
+        </button>
+      </p>
+      {payoutsPaused && (
+        <p data-testid="payouts-paused" className="text-warning-soft">
+          Stripe is holding payouts until you finish your Stripe setup. Payments shows what it needs.
+        </p>
+      )}
+      {failed && (
+        <p role="alert" className="text-danger-soft">
+          Couldn&apos;t open Stripe right now. Payments has the same button for the shop&apos;s owner.
+        </p>
+      )}
     </div>
   );
 }

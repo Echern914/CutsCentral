@@ -5,6 +5,7 @@ import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager } from "../auth/roles.js";
 import { connectEnabled, stripeClient } from "../billing/stripe.js";
 import { getConnectStatus } from "../billing/connect.js";
+import { CLEARED_MIRROR } from "../billing/stripeHealth.js";
 import {
   CONNECT_OAUTH_STATE_COOKIE,
   NATIVE_RETURN_URL,
@@ -270,6 +271,9 @@ stripeConnectOAuthRouter.get("/callback", async (req, res) => {
         // read mirrors the new one from Stripe. Never let a stale "enabled"
         // leak onto an account we have not looked at yet.
         ...(replacing ? { connectChargesEnabled: false, payoutsEnabled: false } : {}),
+        // What Stripe wanted from the OLD account (or from none) is not this
+        // one's; the next status read or account.updated mirrors the new one.
+        ...CLEARED_MIRROR,
       },
     });
     if (replacing) {
@@ -345,6 +349,7 @@ stripeConnectOAuthRouter.post(
         stripeConnectAccountType: null,
         connectChargesEnabled: false,
         payoutsEnabled: false,
+        ...CLEARED_MIRROR,
       },
     });
     logger.info({ shopId: shop.id }, "stripe connect disconnected by barber");

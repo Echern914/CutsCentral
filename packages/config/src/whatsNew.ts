@@ -36,6 +36,16 @@ export interface WhatsNewEntry {
 /** Newest first. New entries go at the TOP. */
 export const WHATS_NEW: readonly WhatsNewEntry[] = [
   {
+    id: "2026-11-19-stripe-needs-in-plain-words",
+    date: "2026-11-19",
+    kind: "feature",
+    title: "See what Stripe needs from you, and where your money is",
+    body:
+      "Payments now lists what Stripe still wants, like a photo of your ID, with its deadline and a Finish in " +
+      "Stripe button. A banner tells you if Stripe holds payouts or pauses payments, and a booking's Payment " +
+      "card says when its money is in your Stripe balance.",
+  },
+  {
     id: "2026-11-18-wallet-pass-true-time",
     date: "2026-11-18",
     kind: "fix",

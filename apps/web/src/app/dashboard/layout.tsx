@@ -11,6 +11,7 @@ import { VocabProvider } from "@/components/VocabProvider";
 import { featureLocks, getBillingSummary } from "@/lib/billing";
 import { collectNotificationSignals } from "@/lib/notificationSignals";
 import { getPlatformNotices } from "@/lib/platformNotices";
+import { getStripeAlert } from "@/lib/stripeAlert";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { ThemeSync } from "@/components/ThemeSync";
 import { PREPAINT_SCRIPT } from "@/lib/theme";
@@ -25,6 +26,7 @@ import { DemoBanner } from "./_components/DemoBanner";
 import { FeatureSearch } from "./_components/FeatureSearch";
 import { NotificationBell } from "./_components/NotificationBell";
 import { PlatformNoticeBanner } from "./_components/PlatformNoticeBanner";
+import { StripeAlertBanner } from "./_components/StripeAlertBanner";
 import { ShopSwitcher } from "./_components/ShopSwitcher";
 import { TrialBanner } from "./_components/TrialBanner";
 import { getOnboardingState } from "@/app/onboarding/state";
@@ -131,10 +133,15 @@ export default async function DashboardLayout({
   // Platform status notices ride the same round trip, for EVERY seat. The
   // helper never throws and turns any failure into "no notices", so an older
   // API or a blip costs a missing banner, never the dashboard.
-  const [billing, setup, platformNotices] = await Promise.all([
+  //
+  // The Stripe account's health rides it too, for the seats that can act on
+  // it (the route is manager-only) - read from the Shop's mirrored columns, so
+  // it costs one row, never a Stripe call. Fails quiet like the notices.
+  const [billing, setup, platformNotices, stripeAlert] = await Promise.all([
     barberOnly ? Promise.resolve(null) : getBillingSummary(),
     seatRole === "OWNER" && !me.data?.demo ? getOnboardingState() : Promise.resolve(null),
     getPlatformNotices(),
+    barberOnly || demo ? Promise.resolve(null) : getStripeAlert(),
   ]);
   const locks = barberOnly || billing === null ? undefined : featureLocks(billing);
   const settingUp = Boolean(setup && !setupComplete(setup.facts));
@@ -256,6 +263,9 @@ export default async function DashboardLayout({
           every seat: it explains whatever might look broken below it. A client
           component RENDERED here, never called (the 2026-08-31 outage). */}
       <PlatformNoticeBanner notices={platformNotices} demo={me.data?.demo ?? false} />
+      {/* The shop's own Stripe account needs them: payouts held, payments
+          paused, the account closed, or details due (billing/stripeHealth). */}
+      <StripeAlertBanner alert={stripeAlert} />
       {/* Read-only demo session: the ribbon replaces the trial banner (a demo
           session has no trial to nag about). */}
       {me.data?.demo ? (

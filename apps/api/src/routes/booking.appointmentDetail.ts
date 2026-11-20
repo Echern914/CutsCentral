@@ -328,6 +328,16 @@ export interface AppointmentDetail {
   cardFeeWaivedAt?: string | null;
   /** Where to go and change it, when another system owns the schedule. */
   externalManageUrl: string | null;
+  /**
+   * WHERE THE MONEY WENT: present when Stripe holds money from this booking
+   * (a payment toward the service, a card-on-file fee or an online tip, net of
+   * refunds). It went to the shop's own Stripe account, never to ChairBack, so
+   * the sheet can say "In your Stripe balance" and open it. `payoutsPaused` =
+   * the account's payouts are off (Shop.payoutsEnabled), so the money is
+   * waiting there until the barber finishes Stripe's setup. Null when Stripe
+   * holds nothing. Optional = an older API.
+   */
+  inPayoutBalance?: { payoutsPaused: boolean } | null;
 }
 
 /** A fee Payment row's status as the sheet states it. */
@@ -576,7 +586,7 @@ export function registerAppointmentDetail(router: Router): void {
     const shopId = req.shop!.id;
     const shop = await prisma.shop.findUnique({
       where: { id: shopId },
-      select: { timezone: true },
+      select: { timezone: true, payoutsEnabled: true },
     });
 
     // forShop() is a hand-curated tenant wrapper that erases nested-relation
@@ -849,6 +859,15 @@ export function registerAppointmentDetail(router: Router): void {
         : null;
     const noShowFee =
       noShowCard?.charge === true ? { cents: noShowCard.cents, last4: noShowCard.last4 } : null;
+    // Money Stripe holds from this booking, every purpose, net of refunds. An
+    // external booking's money was never ours (its payments are not read).
+    const stripeHeldCents = external
+      ? 0
+      : payments.reduce((sum, p) => sum + stripeCollectedCents(p), 0) +
+        stripeCollectedCents(feeRow) +
+        stripeCollectedCents(tipRow);
+    const inPayoutBalance: AppointmentDetail["inPayoutBalance"] =
+      stripeHeldCents > 0 ? { payoutsPaused: shop?.payoutsEnabled !== true } : null;
     const history = await clientHistory(
       shopId,
       appt.clientId,
@@ -933,6 +952,7 @@ export function registerAppointmentDetail(router: Router): void {
       cardFee,
       cardFeeAwaiting,
       cardFeeWaivedAt: feeWait?.cardFeeWaivedAt?.toISOString() ?? null,
+      inPayoutBalance,
     };
     res.json(detail);
   });
@@ -1052,6 +1072,8 @@ export function registerAppointmentDetail(router: Router): void {
       }),
       keptDeposit: null,
       tip: null,
+      // Its money, if any, moved through the system that took the booking.
+      inPayoutBalance: null,
       // A synced booking's tips live where it was booked; nothing to record here.
       tips: { ...appointmentTipSnapshot({ online: null, recorded: null }), recordable: false },
       checkedOutAt: null,

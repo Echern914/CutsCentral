@@ -5,6 +5,7 @@ import { logger } from "../logger.js";
 import { connectEnabled, stripeClient } from "./stripe.js";
 import { applyPaymentEvent } from "./payments.js";
 import { stripeErrorFacts } from "./stripeErrors.js";
+import { CLEARED_MIRROR, HEALTHY, mirrorFields, summarizeStripeHealth, type StripeHealth } from "./stripeHealth.js";
 
 /**
  * Stripe Connect for per-barber CUSTOMER payments. Each shop gets ONE Express
@@ -72,6 +73,13 @@ export interface ConnectStatus {
   chargesEnabled: boolean;
   payoutsEnabled: boolean;
   detailsSubmitted: boolean;
+  /** What Stripe still wants, in plain words (billing/stripeHealth.ts). */
+  health: StripeHealth;
+}
+
+/** The status for a shop with no account, or when Stripe could not be asked. */
+export function emptyConnectStatus(connected: boolean): ConnectStatus {
+  return { connected, chargesEnabled: false, payoutsEnabled: false, detailsSubmitted: false, health: HEALTHY };
 }
 
 /**
@@ -85,7 +93,7 @@ export async function getConnectStatus(shop: {
   stripeConnectAccountId: string | null;
 }): Promise<ConnectStatus> {
   if (!shop.stripeConnectAccountId) {
-    return { connected: false, chargesEnabled: false, payoutsEnabled: false, detailsSubmitted: false };
+    return emptyConnectStatus(false);
   }
   try {
     const acct = await stripeClient().accounts.retrieve(shop.stripeConnectAccountId);
@@ -94,24 +102,28 @@ export async function getConnectStatus(shop: {
       chargesEnabled: Boolean(acct.charges_enabled),
       payoutsEnabled: Boolean(acct.payouts_enabled),
       detailsSubmitted: Boolean(acct.details_submitted),
+      health: summarizeStripeHealth(acct),
     };
-    await mirrorAccountFlags(shop.id, status.chargesEnabled, status.payoutsEnabled);
+    await mirrorAccountFlags(shop.id, status);
     return status;
   } catch (err) {
     logger.warn({ shopId: shop.id, ...stripeErrorFacts(err) }, "connect status fetch failed");
-    return { connected: true, chargesEnabled: false, payoutsEnabled: false, detailsSubmitted: false };
+    return emptyConnectStatus(true);
   }
 }
 
-/** Mirror charges/payouts flags onto the Shop (idempotent column writes). */
-async function mirrorAccountFlags(
-  shopId: string,
-  chargesEnabled: boolean,
-  payoutsEnabled: boolean,
-): Promise<void> {
+/**
+ * Mirror charges/payouts and what Stripe still needs onto the Shop
+ * (idempotent column writes), so gates and the dashboard banner read one row.
+ */
+async function mirrorAccountFlags(shopId: string, status: ConnectStatus): Promise<void> {
   await prisma.shop.updateMany({
     where: { id: shopId },
-    data: { connectChargesEnabled: chargesEnabled, payoutsEnabled },
+    data: {
+      connectChargesEnabled: status.chargesEnabled,
+      payoutsEnabled: status.payoutsEnabled,
+      ...mirrorFields(status.health),
+    },
   });
 }
 
@@ -156,6 +168,7 @@ export async function applyConnectEvent(event: Stripe.Event): Promise<void> {
         data: {
           connectChargesEnabled: Boolean(acct.charges_enabled),
           payoutsEnabled: Boolean(acct.payouts_enabled),
+          ...mirrorFields(summarizeStripeHealth(acct)),
         },
       });
       if (count === 0) {
@@ -200,6 +213,7 @@ export async function applyConnectEvent(event: Stripe.Event): Promise<void> {
           stripeConnectAccountType: null,
           connectChargesEnabled: false,
           payoutsEnabled: false,
+          ...CLEARED_MIRROR,
         },
       });
       if (count === 0) {
