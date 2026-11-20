@@ -119,12 +119,13 @@ export type PaidPlanKey = (typeof PAID_PLAN_KEYS)[number];
  * (routes/shops.ts) and by every trial sentence in the product.
  *
  * 🔴 Signup saves the end date on the shop, so changing this only ever affects
- * shops created afterwards. A shop already on a longer trial keeps its date.
+ * shops created afterwards. A shop keeps the date it signed up with: the
+ * shops that joined between 2026-11-08 and 2026-11-20 are on 7 days (#740).
  */
 export const BILLING = {
   planName: PLANS.pro.name,
   priceMonthlyUsd: PLANS.pro.priceMonthlyUsd,
-  trialDays: 7,
+  trialDays: 14,
 } as const;
 
 /**

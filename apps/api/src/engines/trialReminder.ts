@@ -68,9 +68,11 @@ export const FOLLOW_UP_MAX_DAYS = 90;
 /**
  * A shop gets no "your trial is ending" email until it is this many days old.
  * The first reminder is due once a week or less is left, and a 7-day trial
+ * (shops that signed up 2026-11-08 to 11-20, or any short trial set by hand)
  * starts inside that week: without this, an owner who signed up that morning
  * would hear about the trial ending at the next sweep. Four days puts the
- * email at 2-3 days left on a 7-day trial and changes nothing for a longer one.
+ * email at 2-3 days left on a 7-day trial and changes nothing for the
+ * standard 14-day one, whose first reminder lands with 7 days left.
  */
 export const FIRST_REMINDER_MIN_AGE_DAYS = 4;
 
