@@ -78,6 +78,7 @@ export default async function AccountPage() {
           initial={notify.data.prefs}
           devices={notify.data.devices}
           shopNotifyPhone={notify.data.shopNotifyPhone}
+          otherChairsApplies={notify.data.otherChairsApplies ?? false}
         />
       )}
       <AdvancedCard timezone={notify.data?.timezone ?? null} />

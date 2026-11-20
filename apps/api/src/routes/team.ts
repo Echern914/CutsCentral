@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { APP_NAME, apiEnv, randomToken, vocabularyForShop } from "@chairback/config";
-import { forShop, prisma, runAsOwner, type Prisma } from "@chairback/db";
+import { forShop, prisma, runAsOwner, Prisma } from "@chairback/db";
 import { requireShop, requireUser } from "../middleware/auth.js";
 import { requireManager, requireOwner } from "../auth/roles.js";
 import { accountLimiter } from "../middleware/rateLimit.js";
@@ -370,6 +370,99 @@ teamRouter.patch("/members/:id", requireOwner, async (req, res) => {
     }
   });
   res.json({ ok: true });
+});
+
+const ownerChairSchema = z
+  .object({
+    // null = "I don't work a chair".
+    staffId: z.string().min(1).nullable(),
+  })
+  .strict();
+
+/**
+ * PUT /api/team/owner/staff — the owner says which chair they work themselves.
+ *
+ * 🔴 ITS OWN ROUTE, NOT A HOLE IN `cannot_modify_owner`. The owner's seat is
+ * refused by PATCH /members/:id because that route can change a ROLE, and the
+ * owner's must never move. This one carries a chair id and nothing else (the
+ * schema is strict), so there is no body that could reach the role: lifting
+ * the guard for "just the chair field" would have left that to a conditional
+ * somebody later gets wrong.
+ *
+ * Why it exists at all: an owner who takes clients was the one person in the
+ * shop the product could not place. Every barber's seat names a chair; the
+ * owner's session always said "no chair", so nothing could default to theirs.
+ *
+ * The seat row is created if the shop predates team seats and never got one.
+ * It is written with role OWNER, and ownership is still read from
+ * Shop.ownerId everywhere (middleware/auth.ts) - the row grants nothing.
+ */
+teamRouter.put("/owner/staff", requireOwner, async (req, res) => {
+  const parsed = ownerChairSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_input", issues: parsed.error.issues });
+    return;
+  }
+  const shopId = req.shop!.id;
+  const userId = req.userId!;
+  // requireOwner already admits the owner alone; this is the same fact read
+  // from the one place ownership lives, so the route cannot drift from it.
+  if (userId !== req.shop!.ownerId) {
+    res.status(403).json({ error: "forbidden_role" });
+    return;
+  }
+
+  const staffId = parsed.data.staffId;
+  if (staffId) {
+    const chair = await forShop(shopId).staff.findFirst({
+      where: { id: staffId, active: true },
+      select: { id: true },
+    });
+    if (!chair) {
+      res.status(400).json({ error: "invalid_staff" });
+      return;
+    }
+    const claimed = await prisma.shopMember.findFirst({
+      where: { staffId, userId: { not: userId } },
+      select: { id: true },
+    });
+    if (claimed) {
+      res.status(409).json({ error: "staff_taken" });
+      return;
+    }
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const seat = await tx.shopMember.findUnique({
+        where: { shopId_userId: { shopId, userId } },
+        select: { id: true, staffId: true },
+      });
+      if (seat) {
+        // The chair and only the chair. `role` is not in this write.
+        await tx.shopMember.update({ where: { id: seat.id }, data: { staffId } });
+      } else {
+        await tx.shopMember.create({ data: { shopId, userId, role: "OWNER", staffId } });
+      }
+      // Same transaction as the seat, like every other chair link: Staff.userId
+      // mirrors the seat and the two must never disagree.
+      await applyChairLink(tx, {
+        shopId,
+        userId,
+        previousStaffId: seat?.staffId ?? null,
+        nextStaffId: staffId,
+      });
+    });
+  } catch (err) {
+    // ShopMember.staffId is unique: somebody else was linked to this chair
+    // between the check above and the write.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      res.status(409).json({ error: "staff_taken" });
+      return;
+    }
+    throw err;
+  }
+  res.json({ ok: true, staffId });
 });
 
 /** A public chair name from a person's name - never an email address. */

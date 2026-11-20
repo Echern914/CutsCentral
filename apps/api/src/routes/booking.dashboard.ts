@@ -75,7 +75,7 @@ import {
   SlotTakenError,
 } from "../engines/bookingWrite.js";
 import { findConflicts, recordConflicts } from "../engines/bookingConflict.js";
-import { sendToBarber } from "../services/barberNotify.js";
+import { sendToChair } from "../services/chairAlerts.js";
 import {
   apiEnv,
   noShowWindowClosed,
@@ -7792,9 +7792,13 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
               select: { userId: true, name: true },
             })
           : null;
-        await sendToBarber({
+        await sendToChair({
           shopId,
-          userId: chair?.userId ?? shopRow.ownerId,
+          ownerId: shopRow.ownerId,
+          chairUserId: chair?.userId,
+          // The owner always: somebody has to ring a customer, and only his
+          // side of the dashboard can move either booking.
+          audience: "decider",
           kind: "conflict",
           message: {
             title: "Double-booked chair",
@@ -7806,7 +7810,7 @@ bookingDashboardRouter.post("/appointments/walk-in", async (req, res) => {
           },
         });
       } catch {
-        // sendToBarber never throws, but the lookups above can.
+        // sendToChair never throws, but the lookups above can.
       }
     })();
   }

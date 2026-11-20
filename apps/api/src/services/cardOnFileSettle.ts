@@ -13,7 +13,8 @@ import { agreedPriceCents } from "./appointmentPriceLedger.js";
 import { toCents as configToCents } from "../billing/payments.js";
 import { sendEmail } from "../messaging/email.js";
 import { buildCardChargedEmail } from "../messaging/templates.js";
-import { appointmentDeepLink, sendToBarber } from "./barberNotify.js";
+import { appointmentDeepLink } from "./barberNotify.js";
+import { sendToChair } from "./chairAlerts.js";
 
 /**
  * What happens to a KEPT card when the appointment ends without being paid at
@@ -297,9 +298,12 @@ export async function holdCardFeeForApproval(params: {
     }),
   );
   const who = [appt?.firstName, appt?.lastName].filter(Boolean).join(" ") || "A client";
-  await sendToBarber({
+  await sendToChair({
     shopId: params.shopId,
-    userId: appt?.staff?.userId ?? params.ownerId,
+    ownerId: params.ownerId,
+    chairUserId: appt?.staff?.userId,
+    // The owner first, always: charging, waiving or chasing a fee is his call.
+    audience: "decider",
     kind: "cancel",
     message: {
       title: `Charge ${who}'s late-cancel fee?`,
@@ -435,9 +439,12 @@ async function tellBarber(params: {
   const who = [appt?.firstName, appt?.lastName].filter(Boolean).join(" ") || "A customer";
   const dollars = (params.cents / 100).toFixed(2);
   const why = params.reason === "no_show" ? "no-show" : "late cancellation";
-  await sendToBarber({
+  await sendToChair({
     shopId: params.shopId,
-    userId: appt?.staff?.userId ?? params.ownerId,
+    ownerId: params.ownerId,
+    chairUserId: appt?.staff?.userId,
+    // The owner first, always: charging, waiving or chasing a fee is his call.
+    audience: "decider",
     kind: "cancel",
     message: {
       title: `Couldn't charge ${who}'s card`,
@@ -470,9 +477,12 @@ async function tellBarberSetupProblem(params: {
   const who = [appt?.firstName, appt?.lastName].filter(Boolean).join(" ") || "A customer";
   const dollars = (params.cents / 100).toFixed(2);
   const why = params.reason === "no_show" ? "no-show" : "late cancellation";
-  await sendToBarber({
+  await sendToChair({
     shopId: params.shopId,
-    userId: appt?.staff?.userId ?? params.ownerId,
+    ownerId: params.ownerId,
+    chairUserId: appt?.staff?.userId,
+    // The owner first, always: charging, waiving or chasing a fee is his call.
+    audience: "decider",
     kind: "cancel",
     message: {
       title: `Couldn't charge ${who}'s card`,

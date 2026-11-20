@@ -29,12 +29,21 @@ notificationsRouter.use(requireUser, requireShop, requireActiveAccess);
 notificationsRouter.get("/", async (req, res) => {
   const shopId = req.shop!.id;
   const userId = req.userId!;
-  const [prefs, shop, devices] = await Promise.all([
+  const [prefs, shop, otherLogins, devices] = await Promise.all([
     resolveNotifyPrefs(shopId, userId),
     prisma.shop.findUnique({
       where: { id: shopId },
-      select: { notifyPhone: true, timezone: true },
+      select: { notifyPhone: true, timezone: true, ownerId: true },
     }),
+    // Chairs worked by somebody else's login. The owner's "other chairs"
+    // switch only does anything when there is at least one: an alert about a
+    // chair with no login already goes to the owner and nobody else.
+    runWithShop(shopId, (tx) =>
+      tx.staff.findMany({
+        where: { shopId, active: true, userId: { not: null } },
+        select: { userId: true },
+      }),
+    ),
     // User-keyed rows are cross-shop by design (one phone, several shops), so
     // they're read as owner rather than through the shop scope.
     runAsOwner((tx) =>
@@ -52,11 +61,19 @@ notificationsRouter.get("/", async (req, res) => {
       }),
     ),
   ]);
+  const isOwner = shop?.ownerId === userId;
   res.json({
     prefs,
     defaults: NOTIFY_DEFAULTS,
-    // What SMS falls back to when the barber sets no number of his own.
-    shopNotifyPhone: shop?.notifyPhone ?? null,
+    // What SMS falls back to when the OWNER sets no number of their own. Only
+    // the owner falls back to it (sendToBarber), so only the owner is shown it:
+    // telling a barber "blank uses the shop's number" would promise a text that
+    // is never sent, and would hand them the owner's phone number besides.
+    shopNotifyPhone: isOwner ? (shop?.notifyPhone ?? null) : null,
+    // Whether to show the owner's "other chairs" switch at all. False for a
+    // one-person shop, so that shop's settings look exactly as they did.
+    otherChairsApplies:
+      isOwner && otherLogins.some((s) => s.userId !== shop?.ownerId),
     timezone: shop?.timezone ?? null,
     devices: devices.map((d) => ({
       id: d.id,
@@ -88,6 +105,8 @@ const prefsSchema = z
     newBookingEnabled: z.boolean(),
     cancelEnabled: z.boolean(),
     lockScreenNames: z.boolean(),
+    // The owner's switch (see the PUT below: anyone else sending it is refused).
+    otherChairsEnabled: z.boolean(),
   })
   .partial()
   .strict();
@@ -101,6 +120,21 @@ notificationsRouter.put("/", async (req, res) => {
   }
   const shopId = req.shop!.id;
   const userId = req.userId!;
+  // 🔴 "OTHER CHAIRS" IS THE OWNER'S SWITCH. It is only ever read for the
+  // owner (alertRecipients), so a barber's row holding `false` would do
+  // nothing - and that is the reason to refuse it rather than store it: a
+  // setting that saves and changes nothing reads as a broken setting, and a
+  // barber's client must never be able to believe it muted the owner.
+  if (parsed.data.otherChairsEnabled !== undefined) {
+    const shop = await prisma.shop.findUnique({
+      where: { id: shopId },
+      select: { ownerId: true },
+    });
+    if (shop?.ownerId !== userId) {
+      res.status(403).json({ error: "owner_only" });
+      return;
+    }
+  }
   const data = {
     ...parsed.data,
     ...(parsed.data.notifyPhone !== undefined

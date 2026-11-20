@@ -55,6 +55,11 @@ export const NOTIFY_DEFAULTS = {
   cancelEnabled: true,
   // The Lock Screen widget shows client first names (routes/nextUp.ts).
   lockScreenNames: true,
+  // OWNER ONLY: "tell me about bookings on everyone else too". Read for the
+  // shop owner and nobody else (alertRecipients, chairAlerts.ts). On by default: before
+  // this existed an owner stopped hearing about a chair the moment its barber
+  // got a login, and most owners want to know what their shop is booking.
+  otherChairsEnabled: true,
 };
 
 export type NotifyPrefs = typeof NOTIFY_DEFAULTS;
@@ -164,6 +169,7 @@ export async function resolveNotifyPrefs(
     newBookingEnabled: row.newBookingEnabled,
     cancelEnabled: row.cancelEnabled,
     lockScreenNames: row.lockScreenNames,
+    otherChairsEnabled: row.otherChairsEnabled,
   };
 }
 
@@ -247,6 +253,12 @@ export async function sendToBarber(params: {
   force?: boolean;
   /** Pre-resolved prefs, when the caller already read them in a loop. */
   prefs?: NotifyPrefs;
+  /**
+   * Numbers already texted about THIS event. One event can go to two people
+   * (sendToChair, chairAlerts.ts), and two people can share one phone - a number in here is
+   * not texted again, and a number texted here is added to it.
+   */
+  textedNumbers?: Set<string>;
 }): Promise<BarberSendResult> {
   const out: BarberSendResult = { pushed: false, texted: false, emailed: false };
   try {
@@ -259,7 +271,7 @@ export async function sendToBarber(params: {
 
     const shop = await prisma.shop.findUnique({
       where: { id: params.shopId },
-      select: { name: true, notifyPhone: true },
+      select: { name: true, notifyPhone: true, ownerId: true },
     });
     if (!shop) return out;
     const url = params.message.url ?? `${apiEnv().APP_BASE_URL}/dashboard/booking`;
@@ -283,7 +295,16 @@ export async function sendToBarber(params: {
     // barbers in one shop can each get their own texts. The RECURRING
     // reminders read a separate switch: texting on every booking is one text
     // per event, texting every next-up is one per appointment.
-    const to = prefs.notifyPhone?.trim() || shop.notifyPhone;
+    //
+    // 🔴 THE SHOP LINE IS THE OWNER'S. Only the owner falls back to it. A
+    // barber with a login and no number of his own used to borrow it, which
+    // meant the owner's phone got a text for every booking on that barber's
+    // chair with no way to stop it - the owner's own switches were never
+    // read, because the alert was "the barber's". The owner now gets his own
+    // copy of the event (chairAlerts.ts), governed by his own switches, and
+    // that copy is what texts the shop line.
+    const isOwner = params.userId === shop.ownerId;
+    const to = prefs.notifyPhone?.trim() || (isOwner ? shop.notifyPhone : null);
     const smsAllowed =
       params.kind === "nextUp" || params.kind === "dayAhead"
         ? prefs.smsRemindersEnabled
@@ -292,7 +313,14 @@ export async function sendToBarber(params: {
     // alert by text gets it by EMAIL below instead - otherwise turning texts
     // off would silently drop every alert for a barber without the app.
     const textsOff = !smsEnabled();
-    if (smsAllowed && to && !textsOff) {
+    // One event, one text per phone: two recipients who share a number (a
+    // barber who typed the shop line as his own) are texted once. Compared on
+    // the last ten digits, because the same phone is saved as "+13025557788"
+    // in one place and "(302) 555-7788" in another.
+    const numberKey = to ? to.replace(/\D/g, "").slice(-10) : "";
+    const alreadyTexted = Boolean(numberKey) && (params.textedNumbers?.has(numberKey) ?? false);
+    if (smsAllowed && to && !textsOff && !alreadyTexted) {
+      params.textedNumbers?.add(numberKey);
       if (apiEnv().DRY_RUN) {
         logger.info(
           { shopId: params.shopId, to, kind: params.kind },
@@ -313,7 +341,13 @@ export async function sendToBarber(params: {
       }
     }
 
-    if (prefs.emailEnabled || (textsOff && smsAllowed && Boolean(to))) {
+    // The email that stands in for a text while texting is off keeps the OLD
+    // reach (own number, else the shop line, for anyone): it goes to this
+    // person's own address, never to the owner's phone, and a barber without
+    // the app has been getting his alerts this way - narrowing it with the
+    // text fallback above would have silently cut him off.
+    const wouldHaveTexted = Boolean(prefs.notifyPhone?.trim() || shop.notifyPhone);
+    if (prefs.emailEnabled || (textsOff && smsAllowed && wouldHaveTexted)) {
       const user = await prisma.user.findUnique({
         where: { id: params.userId },
         select: { email: true },
@@ -344,9 +378,10 @@ export async function sendToBarber(params: {
 }
 
 /**
- * Who to alert about a given appointment: the barber whose chair it is, else
- * the owner. Every barber-facing path should use this rather than defaulting
- * to the owner, or a multi-chair shop sends every alert to one person.
+ * The person working a chair: the barber whose login holds it, else the owner.
+ * This is the "chair" audience of chairAlerts.ts, for callers that need only the id (a
+ * next-up, a tip, "your client is on the way" - things about the person
+ * standing at the chair, which nobody else needs a copy of).
  */
 export function recipientForAppointment(appt: {
   staff: { userId: string | null };

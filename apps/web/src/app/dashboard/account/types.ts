@@ -19,6 +19,11 @@ export interface NotifyPrefs {
   cancelEnabled: boolean;
   /** The Lock Screen widget shows client first names. */
   lockScreenNames: boolean;
+  /**
+   * The owner's switch: also tell me about bookings on chairs someone else
+   * works. Only the owner can change it (the API refuses anyone else).
+   */
+  otherChairsEnabled: boolean;
 }
 
 /** A registered push device - where notifications actually land. */
@@ -36,6 +41,8 @@ export interface NotificationsResponse {
   prefs: NotifyPrefs;
   defaults: NotifyPrefs;
   shopNotifyPhone: string | null;
+  /** True for an owner with at least one chair worked by another login. */
+  otherChairsApplies?: boolean;
   timezone: string | null;
   devices: NotifyDevice[];
 }

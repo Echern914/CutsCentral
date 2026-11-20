@@ -114,3 +114,33 @@ describe("client names on the lock screen", () => {
     }
   });
 });
+
+/**
+ * The owner's "other chairs" switch. It is offered only where it can change
+ * something - an owner with somebody else's login on a chair - so a one-person
+ * shop's settings look exactly as they did before it existed.
+ */
+describe("alerts about chairs somebody else works", () => {
+  const WITH = { ...PREFS, otherChairsEnabled: true } as NotifyPrefs;
+  const LABEL = "Alerts for other providers";
+
+  it("🔴 is not shown unless the API says it applies", () => {
+    render(<NotificationsCard initial={WITH} devices={[]} shopNotifyPhone={null} />);
+    expect(screen.queryByLabelText(LABEL)).toBeNull();
+  });
+
+  it("an owner with a team sees it on, and turning it off saves just that", async () => {
+    render(
+      <NotificationsCard initial={WITH} devices={[]} shopNotifyPhone={null} otherChairsApplies />,
+    );
+    const toggle = screen.getByLabelText(LABEL);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    // The hint says what it does NOT turn off, in the shop's own words.
+    expect(screen.getByText(/you still hear about anything that needs your OK/)).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(a.saveNotifyPrefsAction).toHaveBeenCalledTimes(1);
+    expect(a.saveNotifyPrefsAction).toHaveBeenCalledWith({ otherChairsEnabled: false });
+  });
+});

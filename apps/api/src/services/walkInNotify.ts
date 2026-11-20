@@ -8,7 +8,7 @@ import {
   buildWalkInReadyBody,
   buildWalkInRemovedBody,
 } from "../messaging/templates.js";
-import { sendToBarber } from "./barberNotify.js";
+import { sendToChair } from "./chairAlerts.js";
 import { ACTIVE_STATUSES, QUEUE_ORDER } from "../engines/walkInLifecycle.js";
 import {
   recordWalkInEventBestEffort,
@@ -313,9 +313,11 @@ export async function notifyBarberWalkInJoined(
     if (!shop) return;
     const initial = entry.lastName?.trim()?.[0];
     const who = initial ? `${entry.firstName} ${initial.toUpperCase()}.` : entry.firstName;
-    await sendToBarber({
+    await sendToChair({
       shopId,
-      userId: entry.preferredStaff?.userId ?? shop.ownerId,
+      ownerId: shop.ownerId,
+      chairUserId: entry.preferredStaff?.userId,
+      audience: "chairAndOwner",
       kind: "newBooking",
       message: {
         title: `Walk-in: ${who}`,

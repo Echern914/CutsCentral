@@ -345,7 +345,10 @@ describe("barber booking alerts", () => {
     await waitFor(() => barberSms().some((s) => s.body.includes("canceled")));
   });
 
-  it("targets the staff-linked user's devices when the staffer is linked", async () => {
+  it("🔴 a booking on a barber's chair tells the barber AND the owner; a request always reaches the owner", async () => {
+    // The whole public path, not just the resolver (services/
+    // chairAlerts.test.ts): before this, the owner heard nothing at all
+    // about a chair once its barber had a login.
     // A teammate user linked to the staff row, with their own device.
     const signup = await request(app)
       .post("/api/auth/signup")
@@ -370,15 +373,53 @@ describe("barber booking alerts", () => {
       data: { userId: mate!.id },
     });
     try {
+      const to = (title: string) =>
+        pushes
+          .filter((p) => p.payload.title === title)
+          .map((p) => p.endpoint)
+          .sort();
+      const BOTH = ["https://push.test/mate-device", "https://push.test/owner-device"];
+
       await book(futureAtHour(6, 10), "Lena");
-      await waitFor(() => pushes.some((p) => p.payload.title === "New booking"));
-      const push = pushes.find((p) => p.payload.title === "New booking")!;
-      expect(push.endpoint).toBe("https://push.test/mate-device");
-      // The owner did NOT get this one - it's the staffer's booking.
-      expect(
-        pushes.filter((p) => p.endpoint === "https://push.test/owner-device"),
-      ).toHaveLength(0);
+      await waitFor(() => to("New booking").length === 2);
+      // One copy each, not two to anybody.
+      expect(to("New booking")).toEqual(BOTH);
+      // The shop line is the owner's, and it is texted once - by the owner's
+      // copy, not borrowed by the barber's as well.
+      await waitFor(() => barberSms().length > 0);
+      expect(barberSms()).toHaveLength(1);
+
+      // The owner says he does not want news of other chairs...
+      await prisma.barberNotifyPref.upsert({
+        where: { userId_shopId: { userId: ownerId, shopId } },
+        create: { shopId, userId: ownerId, otherChairsEnabled: false },
+        update: { otherChairsEnabled: false },
+      });
+      pushes = [];
+      sent = [];
+      await book(futureAtHour(6, 12), "Noor");
+      await waitFor(() => to("New booking").length > 0);
+      // Settle: a second copy would land a beat after the first.
+      await new Promise((r) => setTimeout(r, 150));
+      expect(to("New booking")).toEqual(["https://push.test/mate-device"]);
+      expect(barberSms()).toHaveLength(0);
+
+      // ...and a REQUEST still reaches him, because only he can approve it.
+      await request(app)
+        .patch("/api/shops/me")
+        .set("Cookie", cookie)
+        .send({ requireBookingApproval: true });
+      pushes = [];
+      const asked = await book(futureAtHour(6, 14), "Ines");
+      expect(asked.pending).toBe(true);
+      await waitFor(() => to("New booking request").length === 2);
+      expect(to("New booking request")).toEqual(BOTH);
     } finally {
+      await request(app)
+        .patch("/api/shops/me")
+        .set("Cookie", cookie)
+        .send({ requireBookingApproval: false });
+      await prisma.barberNotifyPref.deleteMany({ where: { shopId, userId: ownerId } });
       await prisma.staff.update({
         where: { id: staffId },
         data: { userId: null },
