@@ -6,12 +6,14 @@ import { SERVICE_CHARGE_CONSENT } from "@chairback/config/checkoutConsent";
 import { CARD_FEE_APPROVAL_DAYS } from "@chairback/config/shopPolicy";
 import { useEffect, useState, useTransition } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { LocalDate } from "@/components/ui/LocalDate";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
 import { useIsNativeApp } from "@/lib/useIsNativeApp";
-import type { PaymentStatus } from "./actions";
+import type { PaymentStatus, StripeHealth } from "./actions";
 import {
   disconnectStripeAction,
+  finishStripeSetupAction,
   openStripeDashboardAction,
   savePaymentSettingsAction,
   savePayDirectAction,
@@ -45,6 +47,12 @@ const CONNECT_RESULT: Record<string, { text: string; tone: "success" | "error" }
   taken: { text: "That Stripe account is already connected to another shop.", tone: "error" },
   unavailable: { text: "Connecting a Stripe account isn't available right now.", tone: "error" },
   error: { text: "Stripe didn't complete the connection. Please try again.", tone: "error" },
+  // Back from Stripe's own setup form (Finish in Stripe, an Express account).
+  return: {
+    text: "Thanks. Stripe has what you sent, and this page updates once Stripe has checked it.",
+    tone: "success",
+  },
+  refresh: { text: "That Stripe link expired. Tap Finish in Stripe to get a fresh one.", tone: "error" },
 };
 
 const field =
@@ -79,6 +87,8 @@ export function PaymentsManager({
   const { toast } = useToast();
   const [pending, start] = useTransition();
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  // Finish in Stripe: a busy flag that holds a double tap in production React.
+  const [finishing, setFinishing] = useState(false);
   const inApp = useIsNativeApp();
   // Shown when this app build cannot open Stripe's sign-in properly (see
   // linkExistingStripe): the honest alternative, not a blank page.
@@ -211,7 +221,13 @@ export function PaymentsManager({
   // An account made by the retired Express door. Working ones (money inside)
   // keep working; an unfinished one is only in the way.
   const isExpress = connect.connected && initial.connectAccountType !== "standard";
-  const unfinishedExpress = isExpress && !ready;
+  // 🔴 "Never finished" means its details were never sent, which is what lets
+  // the panel below say "It holds no money". An account Stripe PAUSED or
+  // CLOSED after it took payments is not that: it can hold a barber's money
+  // (a $50 no-show fee, 2026-11-19), so it gets what Stripe needs, or the
+  // closed panel, instead. Without the detail flag (an older API), as before.
+  const unfinishedExpress =
+    isExpress && !ready && connect.detailsSubmitted !== true && connect.health?.closed !== true;
 
   // Say what the OAuth round-trip concluded, once, then clean the URL so a
   // reload doesn't repeat it.
@@ -290,6 +306,27 @@ export function PaymentsManager({
     start(() => {
       window.location.href = `${apiBase}/api/payments/connect/oauth/start`;
     });
+  }
+
+  /**
+   * The exact Stripe form for what Stripe still wants. An account set up
+   * through ChairBack (Express) gets Stripe's own setup form for its missing
+   * items; a linked Standard account is the barber's own login, where Stripe
+   * lists them at the top of the dashboard.
+   */
+  function finishInStripe() {
+    if (finishing) return;
+    setFinishing(true);
+    void (isExpress ? finishStripeSetupAction() : openStripeDashboardAction())
+      .catch(() => ({ ok: false, url: undefined }))
+      .then((r) => {
+        if (r.ok && r.url) {
+          window.location.href = r.url;
+          return;
+        }
+        setFinishing(false);
+        toast("Couldn't open Stripe. Please try again.", "error");
+      });
   }
 
   function disconnectStripe() {
@@ -561,12 +598,23 @@ export function PaymentsManager({
                     then pays out to your bank on Stripe&apos;s schedule.
                   </p>
                 </div>
-                {!ready && (
-                  <p className="mt-1 text-xs text-muted">
-                    Stripe still needs a few details before you can take payments.
-                    Finish them in your Stripe dashboard — this page updates when
-                    Stripe tells us you&apos;re done.
-                  </p>
+                {connect.health ? (
+                  <StripeNeeds
+                    health={connect.health}
+                    chargesEnabled={connect.chargesEnabled}
+                    payoutsEnabled={connect.payoutsEnabled}
+                    ownForm={isExpress}
+                    pending={pending || finishing}
+                    onFinish={finishInStripe}
+                  />
+                ) : (
+                  !ready && (
+                    <p className="mt-1 text-xs text-muted">
+                      Stripe still needs a few details before you can take payments.
+                      Finish them in your Stripe dashboard — this page updates when
+                      Stripe tells us you&apos;re done.
+                    </p>
+                  )
                 )}
                 {isExpress && ready && (
                   <p className="mt-1 text-xs text-muted">
@@ -1012,6 +1060,109 @@ export function PaymentsManager({
 
       {/* Fee-free direct payment — shown alongside card payments. */}
       {payDirectCard}
+    </div>
+  );
+}
+
+const DUE: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
+
+/**
+ * WHAT STRIPE STILL WANTS, in plain words, with the one button that opens the
+ * form for it. Before this the page showed two checkmarks while "photo ID
+ * overdue" and "account will be closed" lived only in the platform's own
+ * Stripe dashboard (2026-11-19). Renders nothing for a healthy account.
+ */
+export function StripeNeeds({
+  health,
+  chargesEnabled,
+  payoutsEnabled,
+  ownForm,
+  pending,
+  onFinish,
+}: {
+  health: StripeHealth;
+  chargesEnabled: boolean;
+  payoutsEnabled: boolean;
+  /** An account set up through ChairBack: Finish opens Stripe's own form. */
+  ownForm: boolean;
+  pending: boolean;
+  onFinish: () => void;
+}) {
+  if (health.closed) {
+    return (
+      <div data-qa="stripe-needs" data-state="closed" className="mt-1 rounded-xl border border-danger-soft/40 bg-danger-soft/10 px-3.5 py-3">
+        <p className="text-sm font-semibold text-offwhite">Stripe closed this account</p>
+        <p className="mt-1 text-xs text-muted">
+          Nothing you send Stripe reopens it, so card payments can&apos;t go through
+          it any more. Stripe decides what happens to money already in it: the
+          button above shows where it stands, and Stripe support can tell you more.
+          To take cards again, disconnect it below and connect a different Stripe
+          account.
+        </p>
+      </div>
+    );
+  }
+  const { needs, overdue, dueBy, underReview } = health;
+  const blocked = !chargesEnabled || !payoutsEnabled;
+  if (needs.length === 0 && !underReview && !blocked) return null;
+  if (needs.length === 0 && underReview) {
+    return (
+      <p data-qa="stripe-needs" data-state="review" className="mt-1 text-xs text-muted">
+        Stripe is checking what you sent. Nothing to do right now; this page
+        updates when Stripe is done.
+      </p>
+    );
+  }
+  // 🔴 Never "Stripe may pause your payments" over an item that is not
+  // stopping money: Stripe pauses cards or payouts the moment an overdue item
+  // is one they need, so overdue-while-running is about something else
+  // (2026-11-19: a photo ID past due that only affected Affirm).
+  const effect = !chargesEnabled
+    ? "Until then, clients can't pay by card."
+    : !payoutsEnabled
+      ? "Until then, your payouts are on hold. Card money waits in your Stripe balance."
+      : overdue
+        ? "Your card payments and payouts are still running. Stripe asks for these for something else it offers."
+        : "Finish them before the deadline.";
+  return (
+    <div
+      data-qa="stripe-needs"
+      data-state={overdue ? "overdue" : "due"}
+      className={cn(
+        "mt-1 rounded-xl border px-3.5 py-3",
+        blocked ? "border-danger-soft/40 bg-danger-soft/10" : "border-warning-soft/40 bg-warning-soft/10",
+      )}
+    >
+      <p className="text-sm font-semibold text-offwhite">
+        {overdue ? "Stripe needs these. They're past its deadline." : "Stripe needs:"}
+      </p>
+      {needs.length > 0 ? (
+        <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-sm text-offwhite">
+          {needs.map((n) => (
+            <li key={n}>{n}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 text-sm text-offwhite">A few details to finish your setup.</p>
+      )}
+      {dueBy && !overdue && (
+        <p className="mt-1.5 text-xs text-muted">
+          Due by <LocalDate iso={dueBy} options={DUE} />
+        </p>
+      )}
+      <p className="mt-1 text-xs text-muted">{effect}</p>
+      <button
+        onClick={onFinish}
+        disabled={pending}
+        className="mt-3 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:opacity-50"
+      >
+        {pending ? "Opening…" : "Finish in Stripe"}
+      </button>
+      <p className="mt-1.5 text-xs text-muted">
+        {ownForm
+          ? "Opens Stripe's own form for exactly these. This page updates once Stripe has checked them."
+          : "Opens your Stripe dashboard, where Stripe lists these at the top. This page updates once Stripe has checked them."}
+      </p>
     </div>
   );
 }

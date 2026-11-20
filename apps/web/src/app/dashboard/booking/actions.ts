@@ -2484,6 +2484,12 @@ export interface AppointmentDetail {
   cardFeeAwaiting?: { cents: number; last4: string | null; since: string; lapsesAt: string } | null;
   /** A waiting fee the barber waived, or that lapsed undecided. Optional = older API. */
   cardFeeWaivedAt?: string | null;
+  /**
+   * Stripe holds money from this booking (a service payment, a card-on-file
+   * fee or an online tip, net of refunds), in the shop's own Stripe account.
+   * `payoutsPaused` = Stripe is not paying it out yet. Optional = older API.
+   */
+  inPayoutBalance?: { payoutsPaused: boolean } | null;
 }
 
 /**

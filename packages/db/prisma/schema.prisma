@@ -676,6 +676,11 @@ model Shop {
   stripeTerminalLocationId String?
   connectChargesEnabled  Boolean      @default(false) // mirrors account.charges_enabled
   payoutsEnabled         Boolean      @default(false) // mirrors account.payouts_enabled
+  // What Stripe still wants (billing/stripeHealth.ts), mirrored like the two
+  // flags above so the dashboard banner reads one row, never Stripe.
+  connectRequirementsDue     Boolean   @default(false) // currently_due or past_due is non-empty
+  connectRequirementsDueBy   DateTime? // requirements.current_deadline
+  connectDisabledReason      String? // requirements.disabled_reason, e.g. "rejected.other"
   // NOTE: only off | ahead | hold are valid HERE. `terminal` exists on the enum
   // for the Payment row snapshot and is not a mode a shop can be put into.
   paymentsMode           PaymentsMode @default(off)
