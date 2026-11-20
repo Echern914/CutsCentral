@@ -44,6 +44,7 @@ import { tierOpeningsRouter } from "./routes/tierOpenings.js";
 import { walletRouter } from "./routes/wallet.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { barberRouter } from "./routes/barber.js";
+import { barberCalendarRouter } from "./routes/barberCalendar.js";
 import { nextUpRouter } from "./routes/nextUp.js";
 import { barberClientsRouter } from "./routes/barberClients.js";
 import { walkInBarberRouter } from "./routes/walkIn.barber.js";
@@ -290,6 +291,9 @@ export function createApp(): Express {
   // The barber's own clientele (people their chair has served) - same
   // more-specific-first mounting so barberRouter can never shadow it.
   app.use("/api/barber/clients", dashboardLimiter, barberClientsRouter);
+  // A team member's own calendar: any day, own hours and time off, and booking,
+  // moving or cancelling their own clients. Same more-specific-first mounting.
+  app.use("/api/barber/calendar", dashboardLimiter, barberCalendarRouter);
   app.use("/api/barber", dashboardLimiter, barberRouter);
   // Who's next, for the Lock Screen widget: its own narrow token or the
   // app's session (routes/nextUp.ts).

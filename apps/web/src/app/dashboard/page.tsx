@@ -26,6 +26,7 @@ import { ConsentSetup } from "./_components/ConsentSetup";
 import { TodayHeader } from "./_components/TodayHeader";
 import { ReferralCard } from "./_components/ReferralCard";
 import { BarberHome, type BarberHomeData } from "./_components/BarberHome";
+import { getOwnDayAction } from "./_components/barberCalendarActions";
 import { DemoTour } from "@/components/tour/DemoTour";
 
 interface ShopMe extends ShopSettings {
@@ -71,15 +72,21 @@ export default async function DashboardPage({
     // Generous UTC window; the API narrows to the shop's own calendar day.
     const from = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
     const to = new Date(Date.now() + 36 * 60 * 60 * 1000).toISOString();
-    const home = await apiGet<BarberHomeData>(
-      `/api/barber/home?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
-    );
+    // Their calendar loads beside the home payload. It is allowed to fail on
+    // its own: the home screen then shows the plain list of today.
+    const [home, ownDay] = await Promise.all([
+      apiGet<BarberHomeData>(
+        `/api/barber/home?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      ),
+      getOwnDayAction(),
+    ]);
     if (!home.ok || !home.data) throw new Error("Failed to load your day");
     return (
       <BarberHome
         data={home.data}
         barberName={who.data.name}
         avatarUrl={who.data.avatarUrl}
+        day={ownDay.ok ? (ownDay.data ?? null) : null}
       />
     );
   }

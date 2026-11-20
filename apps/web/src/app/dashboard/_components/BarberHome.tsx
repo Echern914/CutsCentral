@@ -14,6 +14,8 @@ import { Avatar } from "@/components/ui/Avatar";
 import { BarberWalkIns } from "./BarberWalkIns";
 import { BarberClients } from "./BarberClients";
 import { SpecialChip } from "./SpecialChip";
+import { BarberDay } from "./BarberDay";
+import type { OwnDay } from "./barberCalendarActions";
 
 export interface BarberRow {
   id: string;
@@ -62,10 +64,17 @@ export function BarberHome({
   data,
   barberName,
   avatarUrl,
+  day,
 }: {
   data: BarberHomeData;
   barberName: string;
   avatarUrl?: string | null;
+  /**
+   * Their own calendar for today, when it loaded: any day, booking, moving,
+   * hours and time off. Absent, the plain list of today below is shown, so a
+   * calendar that could not be read never takes the home screen down with it.
+   */
+  day?: OwnDay | null;
 }) {
   const vocab = useVocab();
   const timeFmt = new Intl.DateTimeFormat("en-US", {
@@ -111,11 +120,18 @@ export function BarberHome({
               off or dark, so every existing home screen is unchanged. */}
           <BarberWalkIns />
 
+          {/* Their own calendar: any day, with book, time off and hours. It is
+              what they open the app to do, so it sits above the client list. */}
+          {day && <BarberDay initial={day} />}
+
           {/* Their own clientele (served or booked on this chair), with the
               one action a barber keeps asking for: re-text a lost rewards
               link. Self-loading; renders nothing until they have clients. */}
           <BarberClients />
 
+          {/* The read-only list of today, exactly as before, for when the
+              calendar could not be read (the web can deploy ahead of the API). */}
+          {!day && (
           <Card className="mt-6 overflow-hidden">
             <div className="flex items-baseline justify-between gap-3 border-b border-subtle px-5 py-4">
               <div>
@@ -167,6 +183,7 @@ export function BarberHome({
               </ul>
             )}
           </Card>
+          )}
         </>
       )}
 

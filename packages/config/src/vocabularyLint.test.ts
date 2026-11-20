@@ -222,6 +222,13 @@ const ALLOWED: Exception[] = [
     count: 1,
     why: "API route path for the own-chair home payload.",
   },
+  {
+    path: "apps/web/src/app/dashboard/_components/barberCalendarActions.ts",
+    lexeme: "barber",
+    snippet: '"/api/barber/calendar"',
+    count: 1,
+    why: "API route path for a team member's own calendar (day, hours, time off, bookings).",
+  },
 
   // ---- Wire values that happen to be string literals ----------------------
   {

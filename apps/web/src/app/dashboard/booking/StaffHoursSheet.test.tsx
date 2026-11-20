@@ -123,6 +123,60 @@ describe("working until midnight", () => {
 });
 
 /**
+ * A TEAM MEMBER EDITING THEIR OWN WEEK. The same sheet, handed its own read
+ * and save. It must never reach for the dashboard's actions: those are
+ * manager-only on the server and name a person by id, which a team member's
+ * request is not allowed to do.
+ */
+describe("own hours", () => {
+  function openOwn(own: { load: ReturnType<typeof vi.fn>; save: ReturnType<typeof vi.fn> }) {
+    render(<StaffHoursSheet staffId="own" staffName="Your" own={own} toast={vi.fn()} onClose={vi.fn()} />);
+  }
+
+  it("🔴 reads and saves through the own calendar, never the dashboard's actions", async () => {
+    const own = {
+      load: vi.fn().mockResolvedValue({ ok: true, data: WEEK }),
+      save: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    openOwn(own);
+    expect(await screen.findByText("Your weekly hours")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Sat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+    await waitFor(() => expect(own.save).toHaveBeenCalledTimes(1));
+
+    // Two arguments: the week and the standing breaks. No person id.
+    const args = own.save.mock.calls[0]!;
+    expect(args).toHaveLength(2);
+    expect((args[0] as { weekday: number }[]).map((r) => r.weekday)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(args[1]).toEqual([{ weekday: 1, startMin: 720, endMin: 780, reason: "Lunch" }]);
+    expect(getAvailabilityAction).not.toHaveBeenCalled();
+    expect(saveAvailabilityAction).not.toHaveBeenCalled();
+  });
+
+  it("a failed read says so in their own words and offers no Save", async () => {
+    const own = {
+      load: vi.fn().mockResolvedValue({ ok: false }),
+      save: vi.fn(),
+    };
+    openOwn(own);
+    expect(await screen.findByText(/Couldn't load your hours/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Save hours|Saved/ })).toBeNull();
+    expect(own.save).not.toHaveBeenCalled();
+  });
+
+  it("a refused save is read in the sheet", async () => {
+    const own = {
+      load: vi.fn().mockResolvedValue({ ok: true, data: WEEK }),
+      save: vi.fn().mockResolvedValue({ ok: false }),
+    };
+    openOwn(own);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Sat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save hours" }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Couldn't save/);
+  });
+});
+
+/**
  * SWITCHING FROM BOOKSY OR THECUT: the week is pasted from the old profile
  * instead of set day by day. Apply only fills the sheet - the barber checks
  * it and taps Save hours, which is still the only thing that saves.

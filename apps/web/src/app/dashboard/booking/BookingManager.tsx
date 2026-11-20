@@ -87,6 +87,7 @@ import {
   deleteStaffAction,
   deleteTargetedSlotAction,
   deleteTargetedSlotRuleAction,
+  type AvailabilityData,
   getAvailabilityAction,
   duplicateTargetedRuleAction,
   duplicateTargetedSlotAction,
@@ -5116,11 +5117,25 @@ export function StaffHoursSheet({
   staffName,
   toast,
   onClose,
+  own,
 }: {
   staffId: string;
   staffName: string;
   toast: Toast;
   onClose: () => void;
+  /**
+   * A team member editing THEIR OWN week from their home screen. The same
+   * editor and the same rules; only where the week is read from and saved to
+   * changes (their own calendar's routes, which take no staff id at all), and
+   * the wording speaks to them instead of about them.
+   */
+  own?: {
+    load: () => Promise<{ ok: boolean; data?: AvailabilityData }>;
+    save: (
+      rules: { weekday: number; startMin: number; endMin: number }[],
+      recurringBlocks: { weekday: number; startMin: number; endMin: number; reason?: string }[],
+    ) => Promise<{ ok: boolean }>;
+  };
 }) {
   const [rows, setRows] = useState<HourRow[]>(() =>
     WEEKDAYS.map(() => ({ on: false, start: "09:00", end: "17:00", breaks: [] })),
@@ -5188,7 +5203,7 @@ export function StaffHoursSheet({
     setLoaded(false);
     setLoadFailed(false);
     start(async () => {
-      const r = await getAvailabilityAction(staffId);
+      const r = own ? await own.load() : await getAvailabilityAction(staffId);
       if (!r.ok || !r.data) {
         setLoadFailed(true);
         return;
@@ -5311,7 +5326,9 @@ export function StaffHoursSheet({
     // Snapshot exactly what's being persisted so a successful save clears dirty.
     const snapshotAtSave = JSON.stringify(rows);
     start(async () => {
-      const r = await saveAvailabilityAction(staffId, rules, recurringBlocks);
+      const r = own
+        ? await own.save(rules, recurringBlocks)
+        : await saveAvailabilityAction(staffId, rules, recurringBlocks);
       if (r.ok) {
         setSavedSnapshot(snapshotAtSave);
         toast("Hours saved", "success");
@@ -5323,15 +5340,23 @@ export function StaffHoursSheet({
   }
 
   return (
-    <Sheet title={`${staffName} — weekly hours`} onClose={attemptClose}>
+    <Sheet title={own ? "Your weekly hours" : `${staffName} — weekly hours`} onClose={attemptClose}>
       <p className="mb-3 text-xs text-muted">
-        When this staff member is available to book — and any recurring breaks.
+        {own
+          ? "When you can be booked each week, and any breaks you take every week."
+          : "When this staff member is available to book — and any recurring breaks."}
       </p>
       {loadFailed ? (
         <div role="alert" className="flex flex-col items-start gap-3">
           <p className="text-sm text-danger-soft">
-            Couldn&apos;t load {staffName}&apos;s hours. Nothing has changed, and
-            the saved hours are still in place.
+            {own ? (
+              <>Couldn&apos;t load your hours. </>
+            ) : (
+              <>
+                Couldn&apos;t load {staffName}&apos;s hours.{" "}
+              </>
+            )}
+            Nothing has changed, and the saved hours are still in place.
           </p>
           <button
             type="button"
@@ -5410,8 +5435,11 @@ export function StaffHoursSheet({
           <div className="flex flex-col gap-3">
             {rows.map((r, i) => (
               <div key={i} className="rounded-lg border border-subtle p-2.5">
-                <div className="flex items-center gap-3">
-                  <label className="flex w-20 items-center gap-2 text-sm">
+                {/* The two selects share the row and SHRINK: the end one carries
+                    a "12:00 AM (midnight)" option, and a select is as wide as
+                    its longest option, which pushed it off a phone screen. */}
+                <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+                  <label className="flex min-h-[44px] w-[4.5rem] shrink-0 items-center gap-2 text-sm sm:w-20">
                     <input
                       type="checkbox"
                       checked={r.on}
@@ -5423,15 +5451,15 @@ export function StaffHoursSheet({
                     disabled={!r.on}
                     value={r.start}
                     onChange={(v) => patchRow(i, { start: v })}
-                    className={timeSelectCls}
+                    className={`${timeSelectCls} min-h-[44px] min-w-0 flex-1`}
                     aria-label={`${WEEKDAYS[i]} start`}
                   />
-                  <span className="text-muted">–</span>
+                  <span className="shrink-0 text-muted">–</span>
                   <TimeSelect
                     disabled={!r.on}
                     value={r.end}
                     onChange={(v) => patchRow(i, { end: v })}
-                    className={timeSelectCls}
+                    className={`${timeSelectCls} min-h-[44px] min-w-0 flex-1`}
                     allowMidnightEnd
                     aria-label={`${WEEKDAYS[i]} end`}
                   />
@@ -5445,12 +5473,18 @@ export function StaffHoursSheet({
                 {r.on && noServiceDays.includes(i) && (
                   <p className="mt-2 rounded-lg border border-warning-soft/40 bg-warning-soft/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-warning-soft">
                     No service is offered on {WEEKDAYS[i]}s, so customers still
-                    can&apos;t book this day. Turn {WEEKDAYS[i]} on for each
-                    service under{" "}
-                    <span className="text-offwhite">
-                      Services → Available hours for this service
-                    </span>
-                    .
+                    can&apos;t book this day.{" "}
+                    {own ? (
+                      <>Ask the shop owner to offer one on {WEEKDAYS[i]}s.</>
+                    ) : (
+                      <>
+                        Turn {WEEKDAYS[i]} on for each service under{" "}
+                        <span className="text-offwhite">
+                          Services → Available hours for this service
+                        </span>
+                        .
+                      </>
+                    )}
                   </p>
                 )}
 
